@@ -1,28 +1,21 @@
 /**
  * Абстрактный слой доступа к данным для ScoreboardService
- * Поддерживает Firebase Firestore и PocketBase
+ * Работает только с PocketBase
  */
 
 const { VOLLEYBALL_COLLECTION, MATCHES_COLLECTION, GAME_CONSTANTS } = require('../../../js/db-config');
 
 /**
  * Создать утилиту работы с БД
- * @param {{provider: string, db: object|null, admin: object|null, client: object|null}} dbConfig
+ * @param {{provider: string, client: object|null}} dbConfig
  */
 function createDbAdapter(dbConfig) {
-  const { provider, db, admin, client } = dbConfig;
+  const { provider, client } = dbConfig;
 
   /**
    * Получить документ
    */
   async function getDoc(collection, docId) {
-    if (provider === 'firebase') {
-      const snapshot = await db.collection(collection).doc(docId).get();
-      if (!snapshot.exists) return null;
-      return { id: snapshot.id, ...snapshot.data() };
-    }
-
-    // PocketBase
     try {
       const record = await client.collection(collection).getOne(docId);
       return record;
@@ -36,11 +29,6 @@ function createDbAdapter(dbConfig) {
    * Обновить документ
    */
   async function updateDoc(collection, docId, data) {
-    if (provider === 'firebase') {
-      await db.collection(collection).doc(docId).update(data);
-      return getDoc(collection, docId);
-    }
-
     // PocketBase — разделяем обычные поля и null (для удаления)
     const updateData = {};
     const deleteFields = [];
@@ -70,11 +58,6 @@ function createDbAdapter(dbConfig) {
    * Создать/заменить документ
    */
   async function setDoc(collection, docId, data, options = {}) {
-    if (provider === 'firebase') {
-      await db.collection(collection).doc(docId).set(data, options);
-      return getDoc(collection, docId);
-    }
-
     // PocketBase
     if (options.merge) {
       return updateDoc(collection, docId, data);
@@ -87,11 +70,6 @@ function createDbAdapter(dbConfig) {
    * Создать запись (авто-ID)
    */
   async function addDoc(collection, data) {
-    if (provider === 'firebase') {
-      const ref = await db.collection(collection).add(data);
-      return { id: ref.id, ...data };
-    }
-
     // PocketBase
     const record = await client.collection(collection).create(data);
     return record;
@@ -101,27 +79,6 @@ function createDbAdapter(dbConfig) {
    * Запрос коллекции с фильтрами
    */
   async function queryDocs(collection, filters = {}) {
-    if (provider === 'firebase') {
-      let query = db.collection(collection);
-      if (filters.where) {
-        for (const [field, op, value] of filters.where) {
-          query = query.where(field, op, value);
-        }
-      }
-      if (filters.orderBy) {
-        query = query.orderBy(filters.orderBy.field, filters.orderBy.direction || 'desc');
-      }
-      if (filters.limit) {
-        query = query.limit(filters.limit);
-      }
-      const snapshot = await query.get();
-      const results = [];
-      snapshot.forEach(doc => {
-        results.push({ id: doc.id, ...doc.data() });
-      });
-      return results;
-    }
-
     // PocketBase
     const listFilters = {};
     if (filters.where) {
@@ -150,9 +107,6 @@ function createDbAdapter(dbConfig) {
    * Server timestamp или аналог
    */
   function serverTimestamp() {
-    if (provider === 'firebase') {
-      return admin.firestore.FieldValue.serverTimestamp();
-    }
     return new Date().toISOString();
   }
 
@@ -160,9 +114,6 @@ function createDbAdapter(dbConfig) {
    * Delete field
    */
   function deleteField() {
-    if (provider === 'firebase') {
-      return admin.firestore.FieldValue.delete();
-    }
     return null; // PocketBase: null удаляет поле
   }
 
@@ -175,8 +126,6 @@ function createDbAdapter(dbConfig) {
     serverTimestamp,
     deleteField,
     provider,
-    db,
-    admin,
     client,
   };
 }

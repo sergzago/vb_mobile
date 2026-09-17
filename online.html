@@ -344,7 +344,7 @@
     </div>
 
     <script>
-        // DB wrappers для обратной совместимости с inline Firebase кодом
+        // DB wrappers для обратной совместимости с inline кодом
         var scoreboard_collection;
         var matches_collection;
 
@@ -360,9 +360,9 @@
                 // Провайдер БД
                 var el = document.getElementById('dbProviderLabel');
                 if (el) {
-                    var p = 'firebase';
-                    try { p = DB_CONFIG.provider || 'firebase'; } catch (e) {}
-                    var labels = { firebase: 'Firebase', pocketbase: 'PocketBase' };
+                    var p = 'pocketbase';
+                    try { p = DB_CONFIG.provider || 'pocketbase'; } catch (e) {}
+                    var labels = { pocketbase: 'PocketBase' };
                     el.textContent = labels[p] || p;
                 }
                 // Создаём обёртку scoreboard_collection
@@ -596,7 +596,7 @@
                     console.error('Error loading games:', error);
                     var errorMessage = 'Ошибка загрузки данных';
                     if (error.code === 'permission-denied') {
-                        errorMessage = 'Ошибка доступа к базе данных. Проверьте настройки Firebase.';
+                        errorMessage = 'Ошибка доступа к базе данных. Проверьте настройки PocketBase.';
                     } else if (error.code === 'unavailable') {
                         errorMessage = 'Нет подключения к интернету. Проверьте соединение.';
                     } else if (error.code === 'not-found') {

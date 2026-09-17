@@ -1,8 +1,10 @@
-const CACHE_NAME = 'volleyball-scoreboard-v9';
+const CACHE_NAME = 'volleyball-scoreboard-v10';
 const ASSETS = [
   '/mobile.html',
   '/css/mobile.css',
   '/js/mobile.js',
+  '/js/mobile-admin.js',
+  '/js/templates_visual_mobile.js',
   '/js/db-config.js',
   '/js/db-interface.js',
   '/js/auth.js',

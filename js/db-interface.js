@@ -1,7 +1,7 @@
 /**
  * Единый интерфейс работы с базой данных
  *
- * Абстрактный слой, скрывающий реализацию (Firebase / PocketBase).
+ * Абстрактный слой — работает только с PocketBase.
  * Все клиентские страницы и модули работают только через этот интерфейс.
  *
  * Использование:
@@ -15,8 +15,8 @@
 (function(global) {
   'use strict';
 
-  var provider = DB_CONFIG.provider;
-  var client = null; // PocketBase client или Firebase app
+  var provider = 'pocketbase';
+  var client = null; // PocketBase client
   var initialized = false;
 
   // ============================================================================
@@ -24,17 +24,13 @@
   // ============================================================================
 
   function serverTimestamp() {
-    if (provider === 'firebase') {
-      return firebase.firestore.FieldValue.serverTimestamp();
-    }
+    
     // PocketBase — возвращаем текущую дату в ISO формате
     return new Date().toISOString();
   }
 
   function deleteField() {
-    if (provider === 'firebase') {
-      return firebase.firestore.FieldValue.delete();
-    }
+    
     // PocketBase: используем специальный маркер
     return '__PB_DELETE_FIELD__';
   }
@@ -46,7 +42,7 @@
   var utils = {
     /**
      * Преобразует данные от любого провайдера в простой JS-объект.
-     * @param {Object|Record} data - Данные от Firebase (объект) или PocketBase (Record).
+     * @param {Object|Record} data - Данные от PocketBase (Record).
      * @returns {Object}
      */
     getPlainObject: function(data) {
@@ -68,7 +64,6 @@
         if (customId) plainData['id'] = customId;
         return plainData;
       }
-      // Firebase data is already a plain object.
       return data;
     }
   };
@@ -288,24 +283,6 @@
   }
 
   /**
-   * Загрузить Firebase SDK если ещё не загружены
-   */
-  function loadFirebaseSdk() {
-    if (typeof firebase !== 'undefined' && typeof firebase.firestore !== 'undefined') {
-      return Promise.resolve();
-    }
-    return loadScript('https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js')
-      .then(function() {
-        if (typeof firebase !== 'undefined' && typeof firebase.firestore !== 'undefined') return;
-        return loadScript('https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js');
-      })
-      .then(function() {
-        if (typeof firebase !== 'undefined' && typeof firebase.firestore !== 'undefined') return;
-        return loadScript('https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js');
-      });
-  }
-
-  /**
    * Загрузить PocketBase SDK если ещё не загружен
    */
   function loadPocketBaseSdk() {
@@ -324,16 +301,7 @@
 
     return new Promise(function(resolve, reject) {
       try {
-        if (provider === 'firebase') {
-          // Динамически загружаем Firebase SDK если нужно
-          loadFirebaseSdk().then(function() {
-            if (!firebase.apps.length) {
-              firebase.initializeApp(DB_CONFIG.firebase);
-            }
-            initialized = true;
-            resolve();
-          }).catch(reject);
-        } else if (provider === 'pocketbase') {
+         if (provider === 'pocketbase') {
           // Динамически загружаем PocketBase SDK если нужно
           loadPocketBaseSdk().then(function() {
               // Создаём клиент сразу после загрузки SDK
@@ -371,44 +339,6 @@
     login: function(username, password) {
       // Сначала убедимся что DB инициализирован
       return init().then(function() {
-        if (provider === 'firebase') {
-          var usersCollection = DB_CONFIG.collections.USERS;
-          return firebase.firestore().collection(usersCollection).doc(username.toLowerCase()).get()
-            .then(function(doc) {
-              if (!doc.exists || !doc.data().password) {
-                throw new Error('Пользователь не найден');
-              }
-              var userData = doc.data();
-              return verifyPassword(password, userData.password).then(function(valid) {
-                if (!valid) {
-                  throw new Error('Неверный пароль');
-                }
-                var token = crypto.getRandomValues(new Uint8Array(32)).reduce(function(a, b) {
-                  return a + b.toString(16).padStart(2, '0');
-                }, '');
-                var expiresAt = new Date(Date.now() + DB_CONFIG.SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-                var sessionsCollection = 'sessions';
-                var userInfo = {
-                  username: username.toLowerCase(),
-                  role: userData.role || 'user',
-                  email: userData.email,
-                  uid: doc.id,
-                  displayname: userData.displayname || userData.displayName || username
-                };
-                return firebase.firestore().collection(sessionsCollection).doc(token).set({
-                  uid: doc.id,
-                  email: userData.email,
-                  role: userData.role || 'user',
-                  expiresAt: expiresAt,
-                  createdAt: firebase.firestore.FieldValue.serverTimestamp()
-                }).then(function() {
-                  localStorage.setItem('firebase_token', token);
-                  localStorage.setItem('firebase_user', JSON.stringify(userInfo));
-                  return userInfo;
-                });
-              });
-            });
-        }
 
         // PocketBase — авторизуемся через настраиваемую коллекцию (scoreusers)
         var pb = getPocketBaseClient();
@@ -458,17 +388,7 @@
      * Выход
      */
     logout: function() {
-      if (provider === 'firebase') {
-        var token = localStorage.getItem('firebase_token');
-        localStorage.removeItem('firebase_token');
-        localStorage.removeItem('firebase_user');
-        if (token) {
-          var sessionsCollection = 'sessions';
-          return firebase.firestore().collection(sessionsCollection).doc(token).delete()
-            .catch(function() {});
-        }
-        return Promise.resolve();
-      }
+      
       var pb = getPocketBaseClient();
       pb.authStore.clear();
       return Promise.resolve();
@@ -479,14 +399,6 @@
      * @param {function(Object|null)} callback — user info или null
      */
     onAuthStateChanged: function(callback) {
-      if (provider === 'firebase') {
-        var storedUser = null;
-        try {
-          storedUser = JSON.parse(localStorage.getItem('firebase_user'));
-        } catch (e) {}
-        callback(storedUser);
-        return;
-      }
 
       // PocketBase — подписываемся на изменения authStore (реактивно)
       var pb = getPocketBaseClient();
@@ -505,7 +417,7 @@
       });
 
       // Вызываем callback немедленно с текущим состоянием
-      // (как Firebase onAuthStateChanged — срабатывает сразу при подписке)
+      // (срабатывает сразу при подписке)
       if (pb.authStore.isValid && pb.authStore.model) {
         var record = pb.authStore.model;
         callback({
@@ -527,22 +439,6 @@
      */
     createUser: function(username, password, displayName, role) {
       var email = username.toLowerCase() + '@volleyball.local';
-
-      if (provider === 'firebase') {
-        var salt = generateSalt();
-        return hashPassword(password, salt).then(function(hashedPassword) {
-          return firebase.firestore().collection(DB_CONFIG.collections.USERS).doc(username.toLowerCase()).set({
-            email: email,
-            username: username.toLowerCase(),
-            password: hashedPassword,
-            displayname: displayName,
-            role: role || 'user',
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
-        }).then(function() {
-          return { username: username.toLowerCase(), role: role || 'user' };
-        });
-      }
 
       // PocketBase — создаём пользователя в настраиваемой коллекции
       var pb = getPocketBaseClient();
@@ -568,10 +464,6 @@
      * Удаление пользователя (админ)
      */
     deleteUser: function(username) {
-      if (provider === 'firebase') {
-        var usersCollection = DB_CONFIG.collections.USERS;
-        return firebase.firestore().collection(usersCollection).doc(username.toLowerCase()).delete();
-      }
 
       // PocketBase — удаляем пользователя из настраиваемой коллекции
       var pb = getPocketBaseClient();
@@ -592,13 +484,6 @@
      * Получение роли пользователя
      */
     getUserRole: function(username) {
-      if (provider === 'firebase') {
-        return firebase.firestore().collection(DB_CONFIG.collections.USERS).doc(username.toLowerCase()).get()
-          .then(function(doc) {
-            if (doc.exists && doc.data().role) return doc.data().role;
-            return 'user';
-          });
-      }
 
       var pb = getPocketBaseClient();
       var usersCollection = DB_CONFIG.collections.USERS;
@@ -613,9 +498,7 @@
      * Запись в лог авторизаций
      */
     logAuthEvent: function(data) {
-      if (provider === 'firebase') {
-        return firebase.firestore().collection(DB_CONFIG.collections.AUTH_LOG).add(data);
-      }
+      
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.AUTH_LOG).create(data);
     },
@@ -624,12 +507,7 @@
      * Auth object (для обратной совместимости)
      */
     getAuthInstance: function() {
-      if (provider === 'firebase') {
-        try {
-          var stored = JSON.parse(localStorage.getItem('firebase_user'));
-          return stored ? { currentUser: { email: stored.email } } : null;
-        } catch (e) { return null; }
-      }
+      
       return null;
     }
   };
@@ -688,15 +566,6 @@
      * Получить данные игры (однократно)
      */
     get: function(gameId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .doc(gameId)
-          .get()
-          .then(function(doc) {
-            return doc.exists ? doc.data() : null;
-          });
-      }
 
       var pb = getPocketBaseClient();
       return findRecordByCustomId(pb, DB_CONFIG.collections.VOLLEYBALL, 'id', gameId)
@@ -718,17 +587,6 @@
      * @returns {function()} — функция отписки
      */
     subscribe: function(gameId, onUpdate, onError) {
-      if (provider === 'firebase') {
-        var unsubscribe = firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .doc(gameId)
-          .onSnapshot(function(snapshot) {
-            if (snapshot.exists) onUpdate(snapshot.data());
-          }, function(err) {
-            if (onError) onError(err);
-          });
-        return unsubscribe;
-      }
 
       // PocketBase — сначала загружаем текущие данные, потом подписываемся
       var pb = getPocketBaseClient();
@@ -825,17 +683,6 @@
      * @param {Object} data
      */
     update: function(gameId, data) {
-      if (provider === 'firebase') {
-        // Используем set с merge:true для upsert-поведения.
-        // Это создает документ, если он не существует, и обновляет, если существует.
-        // FieldValue.delete() поддерживается в этом режиме.
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .doc(gameId)
-          .set(data, { merge: true })
-          // После обновления получаем и возвращаем обновленный документ
-          .then(() => scoreboard.get(gameId));
-      }
 
       var pb = getPocketBaseClient();
       // PocketBase: обрабатываем маркеры удаления полей
@@ -874,15 +721,6 @@
      * Создать новую игру
      */
     create: function(gameId, initialData) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .doc(gameId)
-          .set(initialData)
-          .then(function() {
-            return Object.assign({ id: gameId }, initialData);
-          });
-      }
 
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.VOLLEYBALL).create(
@@ -940,12 +778,7 @@
         displayname: userInfo.displayname || ''
       });
 
-      // Для Firebase используем set с merge:true, который работает как upsert
-      // и корректно обрабатывает FieldValue.delete().
-      if (provider === 'firebase') {
-        return this.update(gameId, resetData);
-      }
-      // Для PocketBase используем update, который работает как upsert.
+      // PocketBase update работает как upsert.
       return this.update(gameId, resetData);
     },
 
@@ -955,20 +788,6 @@
     queryActive: function() {
       var today = new Date();
       today.setHours(0, 0, 0, 0);
-
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .where('lastEdited', '>=', today)
-          .get()
-          .then(function(snapshot) {
-            var results = [];
-            snapshot.forEach(function(doc) {
-              results.push({ id: doc.id, ...doc.data() });
-            });
-            return results;
-          });
-      }
 
       var pb = getPocketBaseClient();
       // PocketBase хранит даты с пробелом вместо T
@@ -983,18 +802,6 @@
      * Получить все записи из коллекции volleyball (без фильтров)
      */
     queryAll: function() {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .get()
-          .then(function(snapshot) {
-            var results = [];
-            snapshot.forEach(function(doc) {
-              results.push({ id: doc.id, ...doc.data() });
-            });
-            return results;
-          });
-      }
 
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.VOLLEYBALL).getFullList({
@@ -1006,24 +813,6 @@
      * Подписка на все активные игры (для online.html)
      */
     subscribeActive: function(onUpdate, onError) {
-      if (provider === 'firebase') {
-        var today = new Date();
-        today.setHours(0, 0, 0, 0);
-        var query = firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .where('lastEdited', '>=', today);
-
-        var unsubscribe = query.onSnapshot(function(snapshot) {
-          var results = [];
-          snapshot.forEach(function(doc) {
-            results.push({ id: doc.id, ...doc.data() });
-          });
-          onUpdate(results);
-        }, function(err) {
-          if (onError) onError(err);
-        });
-        return unsubscribe;
-      }
 
       // PocketBase — подписка на коллекцию с фильтром
       var pb = getPocketBaseClient();
@@ -1071,12 +860,6 @@
      * Удалить игру из коллекции volleyball
      */
     delete: function(gameId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.VOLLEYBALL)
-          .doc(gameId)
-          .delete();
-      }
 
       var pb = getPocketBaseClient();
       return findRecordByCustomId(pb, DB_CONFIG.collections.VOLLEYBALL, 'id', gameId)
@@ -1098,11 +881,6 @@
      * Добавить запись матча
      */
     add: function(data) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.MATCHES)
-          .add(data);
-      }
 
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.MATCHES).create(data);
@@ -1114,35 +892,6 @@
      */
     query: function(filters) {
       filters = filters || {};
-
-      if (provider === 'firebase') {
-        var query = firebase.firestore().collection(DB_CONFIG.collections.MATCHES);
-        if (filters.dateFrom) {
-          query = query.where('date_time', '>=', filters.dateFrom);
-        }
-        if (filters.dateTo) {
-          query = query.where('date_time', '<=', filters.dateTo);
-        }
-        query = query.orderBy('date_time', 'desc');
-        return query.get().then(function(snapshot) {
-          var results = [];
-          snapshot.forEach(function(doc) {
-            var data = doc.data();
-            if (data.is_deleted) return; // Пропускаем удалённые
-            // Фильтр по команде (клиентская фильтрация для Firebase)
-            if (filters.team) {
-              var teamLower = filters.team.toLowerCase();
-              var homeTeam = (data.home_team || '').toLowerCase();
-              var awayTeam = (data.away_team || '').toLowerCase();
-              if (!homeTeam.includes(teamLower) && !awayTeam.includes(teamLower)) {
-                return;
-              }
-            }
-            results.push({ id: doc.id, ...data });
-          });
-          return results;
-        });
-      }
 
       // PocketBase
       var pb = getPocketBaseClient();
@@ -1168,15 +917,6 @@
      * Мягкое удаление матча
      */
     softDelete: function(matchId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.MATCHES)
-          .doc(matchId)
-          .update({
-            is_deleted: true,
-            deleted_at: firebase.firestore.FieldValue.serverTimestamp()
-          });
-      }
 
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.MATCHES).update(matchId, {
@@ -1189,12 +929,6 @@
      * Удалить матч из коллекции matches
      */
     delete: function(matchId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.MATCHES)
-          .doc(matchId)
-          .delete();
-      }
 
       var pb = getPocketBaseClient();
       return pb.collection(DB_CONFIG.collections.MATCHES).delete(matchId);
@@ -1211,15 +945,6 @@
      * Получить данные пользователя
      */
     get: function(username) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.USERS)
-          .doc(username.toLowerCase())
-          .get()
-          .then(function(doc) {
-            return doc.exists ? doc.data() : null;
-          });
-      }
 
       var pb = getPocketBaseClient();
       var usersCollection = DB_CONFIG.collections.USERS;
@@ -1231,12 +956,6 @@
      * Обновить данные пользователя
      */
     update: function(username, data) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.USERS)
-          .doc(username.toLowerCase())
-          .update(data);
-      }
 
       var pb = getPocketBaseClient();
       var usersCollection = DB_CONFIG.collections.USERS;
@@ -1248,19 +967,9 @@
 
     /**
      * Сменить пароль пользователя
-     * Для Firebase — хешируем и обновляем в Firestore
-     * Для PocketBase — напрямую через SDK (обновление с password + passwordConfirm)
+     * PocketBase — напрямую через SDK (обновление с password + passwordConfirm)
      */
     updatePassword: function(uid, newPassword) {
-      if (provider === 'firebase') {
-        var usersCollection = DB_CONFIG.collections.USERS;
-        var salt = generateSalt();
-        return hashPassword(newPassword, salt).then(function(hashedPassword) {
-          return firebase.firestore().collection(usersCollection).doc(uid).update({
-            password: hashedPassword
-          });
-        });
-      }
 
       var pb = getPocketBaseClient();
       var usersCollection = DB_CONFIG.collections.USERS;
@@ -1274,12 +983,6 @@
      * Удалить запись пользователя
      */
     delete: function(username) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.USERS)
-          .doc(username.toLowerCase())
-          .delete();
-      }
 
       var pb = getPocketBaseClient();
       var usersCollection = DB_CONFIG.collections.USERS;
@@ -1379,15 +1082,6 @@
      * @returns {Promise<Object|null>}
      */
     get: function(templateId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.TEMPLATES)
-          .doc(templateId)
-          .get()
-          .then(function(doc) {
-            return doc.exists ? doc.data() : null;
-          });
-      }
 
       var pb = getPocketBaseClient();
       return findTemplateRecord(pb, templateId)
@@ -1410,22 +1104,6 @@
      * @returns {function()} — функция отписки
      */
     subscribe: function(templateId, onUpdate, onError) {
-      if (provider === 'firebase') {
-        var unsubscribe = firebase.firestore()
-          .collection(DB_CONFIG.collections.TEMPLATES)
-          .doc(templateId)
-          .onSnapshot(function(snapshot) {
-            if (snapshot.exists) {
-              onUpdate(snapshot.data());
-            } else {
-              // Документ не существует — передаём null, вызывающий код применит дефолты
-              onUpdate(null);
-            }
-          }, function(err) {
-            if (onError) onError(err);
-          });
-        return unsubscribe;
-      }
 
       // PocketBase
       var pb = getPocketBaseClient();
@@ -1491,12 +1169,6 @@
      * @returns {Promise}
      */
     update: function(templateId, data) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.TEMPLATES)
-          .doc(templateId)
-          .set(data, { merge: true });
-      }
 
       if (provider === 'pocketbase') {
         // PocketBase: Если logo_base64 - это Rich Editor, он ожидает HTML.
@@ -1535,22 +1207,6 @@
      * @returns {Promise<Array<{id: string, name: string}>>}
      */
     list: function() {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.TEMPLATES)
-          .get()
-          .then(function(snapshot) {
-            var results = [];
-            snapshot.forEach(function(doc) {
-              var data = doc.data();
-              results.push({
-                id: doc.id,
-                name: data.name || doc.id
-              });
-            });
-            return results;
-          });
-      }
 
       var pb = getPocketBaseClient();
       // Коллекция templates может отсутствовать — не даём синхронной ошибке
@@ -1582,12 +1238,6 @@
      * @returns {Promise}
      */
     'delete': function(templateId) {
-      if (provider === 'firebase') {
-        return firebase.firestore()
-          .collection(DB_CONFIG.collections.TEMPLATES)
-          .doc(templateId)
-          .delete();
-      }
 
       var pb = getPocketBaseClient();
       return findTemplateRecord(pb, templateId)
@@ -1635,13 +1285,7 @@
     isInitialized: function() { return initialized; },
     // Получение данных текущего пользователя
     getCurrentUser: function() {
-      if (provider === 'firebase') {
-        try {
-          var stored = JSON.parse(localStorage.getItem('firebase_user'));
-          if (!stored) return null;
-          return { username: stored.username, displayname: stored.displayname || stored.displayName || stored.username };
-        } catch (e) { return null; }
-      }
+      
       if (provider === 'pocketbase') {
         try {
           var pb = getPocketBaseClient();

@@ -1,214 +1,23 @@
-<html>
-  <head>
-    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<!DOCTYPE html>
+<html lang="ru">
+<head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Scoreboard creator</title>
-    <script src="credentials.js"></script>
-    <script src="js/db-config.js"></script>
-    <script src="js/db-interface.js"></script>
-    <script src="js/auth.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/node-uuid/1.4.8/uuid.min.js" integrity="sha384-ojT96dIkO5uDUptuYUBcwQK3flLsTlH0IH2eqFDFzvsvyWu+Uj6z6kjaCUzanmkf" crossorigin="anonymous"></script>
-    <link href="css/css.css" rel="stylesheet">
-    <script src="js/jquery-3.4.1.min.js"></script>
-    <link rel="stylesheet" type="text/css" href="css/styles.css">
-    <style>
-        .auth-header {
-            background: #225378;
-            color: white;
-            padding: 10px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        .auth-header a {
-            color: white;
-            text-decoration: none;
-            margin-left: 15px;
-        }
-        .auth-header a:hover {
-            text-decoration: underline;
-        }
-        .login-prompt {
-            background: #fff3cd;
-            border: 2px solid #ffc107;
-            border-radius: 8px;
-            padding: 30px;
-            text-align: center;
-            margin: 50px auto;
-            max-width: 400px;
-        }
-        .login-prompt h2 {
-            color: #856404;
-            margin-top: 0;
-        }
-        .login-prompt p {
-            color: #856404;
-            margin-bottom: 20px;
-        }
-        .login-prompt .btn {
-            background: #225378;
-            color: white;
-            padding: 12px 24px;
-            text-decoration: none;
-            border-radius: 4px;
-            display: inline-block;
-        }
-        .login-prompt .btn:hover {
-            background: #1b415e;
-        }
-        #authContent {
-            display: none;
-        }
-    </style>
+    <title>Volleyball Scoreboard</title>
     <script>
-        // Проверка авторизации при загрузке страницы
-        window.addEventListener('DOMContentLoaded', async () => {
-            // Если авторизация отключена, сразу показываем контент
-            if (typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0) {
-                document.getElementById('loginPrompt').style.display = 'none';
-                document.getElementById('authContent').style.display = 'block';
-                document.getElementById('userInfo').textContent = 'Гость (авторизация отключена)';
-                return;
-            }
-
-            try {
-                // Сначала инициализируем DB
-                await DB.init();
-            } catch (e) {
-                console.error('DB init failed, showing content anyway:', e);
-                document.getElementById('loginPrompt').style.display = 'none';
-                document.getElementById('authContent').style.display = 'block';
-                document.getElementById('userInfo').textContent = 'Ошибка подключения к БД';
-                return;
-            }
-
-            // Сохраняем текущий URL для возврата после авторизации
-            const currentPath = window.location.pathname + window.location.search;
-
-            DB.auth.onAuthStateChanged(async (user) => {
-                if (!user) {
-                    // Показать форму с просьбой войти
-                    document.getElementById('loginPrompt').style.display = 'block';
-                    document.getElementById('authContent').style.display = 'none';
-                    return;
-                }
-
-                // Получаем роль через DB
-                try {
-                    const username = user.email.split('@')[0];
-                    const userData = await DB.users.get(username);
-
-                    let role = 'user';
-                    if (userData && userData.role) {
-                        role = userData.role === 'admin' ? 'admin' : 'user';
-                    }
-
-                    // Показать основной контент
-                    document.getElementById('loginPrompt').style.display = 'none';
-                    document.getElementById('authContent').style.display = 'block';
-
-                    // Отобразить информацию о пользователе
-                    document.getElementById('userInfo').textContent = user.email + ' (' + (role === 'admin' ? 'Админ' : 'Пользователь') + ')';
-
-                    // Показать ссылку на админку если админ
-                    if (role === 'admin') {
-                        document.getElementById('adminLink').style.display = 'inline';
-                    }
-                } catch (error) {
-                    console.error('Auth error:', error);
-                    // Не перенаправляем при ошибке, показываем контент
-                    document.getElementById('loginPrompt').style.display = 'none';
-                    document.getElementById('authContent').style.display = 'block';
-                }
-            });
-        });
+        // Немедленное перенаправление на мобильную версию интерфейса
+        (function() {
+            var query = window.location.search || '';
+            var hash = window.location.hash || '';
+            window.location.replace('mobile.html' + query + hash);
+        })();
     </script>
-  </head>
-  <body>
-    <div class="auth-header">
-        <span>🏐 Volleyball Scoreboard - Создание игр</span>
-        <div>
-            <span id="userInfo">Загрузка...</span>
-            <a href="admin.html" id="adminLink" style="display:none;">Админ-панель</a>
-            <a href="mobile.html" target="_blank">Мобильная версия</a>
-            <a href="online.html">Результаты</a>
-            <a href="#" onclick="AuthModule.logout(); return false;">Выйти</a>
-        </div>
-    </div>
-
-    <!-- Блок для неавторизованных пользователей -->
-    <div id="loginPrompt" class="login-prompt" style="display: none;">
-        <h2>🔐 Требуется авторизация</h2>
-        <p>Для создания и управления играми необходимо войти в систему</p>
-        <a href="login.html?redirect=index.html" class="btn">Войти в систему</a>
-    </div>
-
-    <!-- Основной контент для авторизованных пользователей -->
-    <div id="authContent" class="container">
-      <div class="row text-center">
-        <div class="col-xs-12 col-md-4">
-          <div class="panel panel-default">
-            <div class="panel-heading">
-              <h3 class="panel-title">Game creation</h3>
-            </div>
-            <div class="panel-body">
-              <div class="panel-body">
-                <label for="game_id">Game ID</label>
-                <input id="game_id" value="demo">
-              </div>
-              <div class="panel-body">
-                <a class="scoreboard-btn btn btn-info" target="_blank" href="#">Scoreboard</a>
-                <br>
-                <span id="sb_link"></span>
-                <br>(Old Design):
-                <span id="scoreboard_link"></span>
-                <hr />
-                <a class="ctl-btn btn btn-info" target="_blank" href="#">Control panel</a>
-                <br>
-                <span id="ctl_link"></span>
-                <hr />
-                <a class="tablo-btn btn btn-info" target="_blank" href="#">Табло</a>
-                <br>
-                <span id="tablo_link"></span>
-                <hr />
-                <a class="results-btn btn btn-info" target="_blank" href="#">Результаты матчей</a>
-                <br>
-                <span id="results_link"></span>
-                <hr />
-                <a class="online-btn btn btn-info" target="_blank" href="#">Онлайн результаты</a>
-                <br>
-                <span id="online_link"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <script>
-        $("#game_id").change(function(){
-          console.log($(this).val());
-          var sb=window.location.href.replace(/\/[^\/]*$/,"/scoreboard.html?game="+$(this).val());
-          var sb_new=window.location.href.replace(/\/[^\/]*$/,"/sb.html?game="+$(this).val());
-          var ctl=window.location.href.replace(/\/[^\/]*$/,"/ctl.html?game="+$(this).val());
-          var tablo=window.location.href.replace(/\/[^\/]*$/,"/tablo.html?game="+$(this).val());
-          var results=window.location.href.replace(/\/[^\/]*$/,"/results.html");
-          $(".ctl-btn").attr('href',ctl);
-          $("#ctl_link").html(ctl);
-          $(".scoreboard-btn").attr('href',sb_new);
-          $("#scoreboard_link").html(sb);
-          $("#sb_link").html(sb_new);
-          $(".tablo-btn").attr('href',tablo);
-          $("#tablo_link").html(tablo);
-          $(".results-btn").attr('href',results);
-          $("#results_link").html(results);
-          var online=window.location.href.replace(/\/[^\/]*$/,"/online.html");
-          $(".online-btn").attr('href',online);
-          $("#online_link").html(online);
-        });
-        $("#game_id").val(uuid()).change();
-      </script>
-    </div>
-
-  </body>
+    <meta http-equiv="refresh" content="0; url=mobile.html">
+</head>
+<body>
+    <p style="font-family: Arial, sans-serif; text-align: center; margin-top: 40px;">
+        Перенаправление на мобильную версию интерфейса…
+        <a href="mobile.html">Открыть вручную</a>
+    </p>
+</body>
 </html>

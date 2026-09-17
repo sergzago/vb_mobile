@@ -1047,8 +1047,6 @@
 
     var base = BASE_URL;
     document.getElementById('linkScoreboard').href = base + 'sb.html?game=' + gid;
-    document.getElementById('linkScoreboardOld').href = base + 'scoreboard.html?game=' + gid;
-    document.getElementById('linkControl').href = base + 'ctl.html?game=' + gid;
     document.getElementById('linkTablo').href = base + 'tablo.html?game=' + gid;
     document.getElementById('linkResults').href = base + 'results.html';
     document.getElementById('linkOnline').href = base + 'online.html';
@@ -2112,9 +2110,9 @@
   function initProviderBadge() {
     var badge = document.getElementById('dbProviderBadge');
     if (!badge) return;
-    var provider = 'firebase';
-    try { provider = DB_CONFIG.provider || 'firebase'; } catch (e) {}
-    var labels = { firebase: 'Firebase', pocketbase: 'PocketBase' };
+    var provider = 'pocketbase';
+    try { provider = DB_CONFIG.provider || 'pocketbase'; } catch (e) {}
+    var labels = { pocketbase: 'PocketBase' };
     badge.textContent = labels[provider] || provider;
   }
 

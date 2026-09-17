@@ -1,9 +1,9 @@
 /**
  * Маршруты для аутентификации
- * Поддерживает Firebase (через Firestore) и PocketBase
+ * Работает только с PocketBase
  *
  * Управление пользователями осуществляется через:
- * - Firebase: коллекция users в Firestore
+ * - админ-панель мобильного интерфейса (вкладка «Админ»)
  * - PocketBase Admin Dashboard (/_/)
  */
 const express = require('express');
@@ -25,15 +25,6 @@ function verifyPasswordServer(password, stored) {
       resolve(derived.toString('hex') === hash);
     });
   });
-}
-
-// Загружаем credentials для Firebase API key
-let firebaseApiKey = null;
-try {
-  const credentials = require('../../credentials.js');
-  firebaseApiKey = credentials?.firebase?.apiKey || process.env.FIREBASE_API_KEY;
-} catch {
-  firebaseApiKey = process.env.FIREBASE_API_KEY;
 }
 
 const USERS_COLLECTION = process.env.POCKETBASE_USERS_COLLECTION || 'scoreusers';
@@ -98,53 +89,14 @@ router.post('/login', async (req, res) => {
 
     const dbConfig = req.app.locals.db;
 
-    if (dbConfig.provider === 'firebase') {
-      const username = identity.includes('@') ? identity.split('@')[0].toLowerCase() : identity.toLowerCase();
-      const usersCollection = process.env.FIREBASE_USERS_COLLECTION || 'users';
-
-      const userDoc = await dbConfig.db
-        .collection(usersCollection)
-        .doc(username)
-        .get();
-
-      if (!userDoc.exists || !userDoc.data().password) {
-        return res.status(401).json({ error: 'Unauthorized', message: 'Пользователь не найден или неверный пароль' });
-      }
-
-      const userData = userDoc.data();
-      const valid = await verifyPasswordServer(password, userData.password);
-
-      if (!valid) {
-        return res.status(401).json({ error: 'Unauthorized', message: 'Пользователь не найден или неверный пароль' });
-      }
-
-      const { v4: uuidv4 } = require('uuid');
-      const token = uuidv4();
-      const sessionsCollection = process.env.FIREBASE_SESSIONS_COLLECTION || 'sessions';
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-      await dbConfig.db.collection(sessionsCollection).doc(token).set({
-        uid: userDoc.id,
-        email: userData.email,
-        role: userData.role || 'user',
-        expiresAt: expiresAt,
-        createdAt: new Date()
+    if (dbConfig.provider !== 'pocketbase') {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Unsupported database provider. Only PocketBase is supported.'
       });
+    }
 
-      res.json({
-        token: token,
-        refreshToken: token,
-        expiresIn: 604800,
-        user: {
-          uid: userDoc.id,
-          email: userData.email,
-          username: username,
-          role: userData.role || 'user',
-          displayName: userData.displayName || username
-        }
-      });
-
-    } else if (dbConfig.provider === 'pocketbase') {
+    {
       // PocketBase: авторизуемся через коллекцию scoreusers
       // Создаём отдельный клиент БЕЗ admin-сессии для user-auth,
       // чтобы токен админа не конфликтовал с авторизацией пользователя
@@ -182,11 +134,6 @@ router.post('/login', async (req, res) => {
         }
       });
 
-    } else {
-      res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Unknown database provider'
-      });
     }
   } catch (error) {
     console.error('Login error:', error.message);
@@ -270,7 +217,7 @@ router.post('/token', requireAuth, async (req, res) => {
 
 /**
  * POST /api/auth/update-password
- * Смена пароля пользователя (Firebase — через Firestore)
+ * Смена пароля пользователя (PocketBase — обновление записи scoreusers)
  */
 router.post('/update-password', requireAuth, async (req, res) => {
   try {
@@ -292,22 +239,19 @@ router.post('/update-password', requireAuth, async (req, res) => {
 
     const dbConfig = req.app.locals.db;
 
-    if (dbConfig.provider !== 'firebase') {
-      return res.status(400).json({
-        error: 'Bad Request',
-        message: 'Смена пароля через API доступна только для Firebase'
+    if (dbConfig.provider !== 'pocketbase') {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Unsupported database provider. Only PocketBase is supported.'
       });
     }
 
-    const crypto = require('crypto');
-    const salt = crypto.randomBytes(16);
-    const derived = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
-    const hashedPassword = salt.toString('hex') + ':' + derived.toString('hex');
-
-    const usersCollection = process.env.FIREBASE_USERS_COLLECTION || 'users';
-    await dbConfig.db.collection(usersCollection).doc(uid).update({ password: hashedPassword });
-
-    res.json({ message: 'Пароль успешно обновлён' });
+    // Смена пароля выполняется администратором через PocketBase
+    // (админ-панель мобильного интерфейса) или PocketBase Admin Dashboard
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: 'Смена пароля через API недоступна. Используйте админ-панель (PocketBase Admin Dashboard).'
+    });
   } catch (error) {
     console.error('Update password error:', error.message);
     res.status(500).json({
@@ -362,9 +306,7 @@ router.post('/log', async (req, res) => {
     const dbConfig = req.app.locals.db;
     if (dbConfig && dbConfig.db) {
       const authLogCollection = process.env.AUTH_LOG_COLLECTION || 'auth_log';
-      if (dbConfig.provider === 'firebase') {
-        await dbConfig.db.collection(authLogCollection).add(logData);
-      } else if (dbConfig.provider === 'pocketbase' && dbConfig.client) {
+      if (dbConfig.provider === 'pocketbase' && dbConfig.client) {
         await dbConfig.client.collection(authLogCollection).create(logData);
       }
       return res.json({ ok: true, target: 'db' });

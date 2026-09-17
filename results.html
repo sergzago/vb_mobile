@@ -598,9 +598,9 @@
       (function() {
         var el = document.getElementById('dbProviderLabel');
         if (!el) return;
-        var p = 'firebase';
-        try { p = DB_CONFIG.provider || 'firebase'; } catch (e) {}
-        var labels = { firebase: 'Firebase', pocketbase: 'PocketBase' };
+        var p = 'pocketbase';
+        try { p = DB_CONFIG.provider || 'pocketbase'; } catch (e) {}
+        var labels = { pocketbase: 'PocketBase' };
         el.textContent = labels[p] || p;
       })();
       

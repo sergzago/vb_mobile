@@ -1,6 +1,6 @@
 /**
  * Middleware для проверки авторизации и ролей пользователей
- * Поддерживает Firebase и PocketBase
+ * Работает только с PocketBase
  */
 
 /**
@@ -48,30 +48,14 @@ async function requireAuth(req, res, next) {
   const dbConfig = req.app.locals.db;
 
   try {
-    if (dbConfig.provider === 'firebase') {
-      const sessionsCollection = process.env.FIREBASE_SESSIONS_COLLECTION || 'sessions';
-      const sessionDoc = await dbConfig.db
-        .collection(sessionsCollection)
-        .doc(token)
-        .get();
+    if (dbConfig.provider !== 'pocketbase') {
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Unsupported database provider. Only PocketBase is supported.'
+      });
+    }
 
-      if (!sessionDoc.exists) {
-        return res.status(401).json({ error: 'Unauthorized', message: 'Неверный или истекший токен.' });
-      }
-
-      const session = sessionDoc.data();
-      if (session.expiresAt && session.expiresAt.toMillis() < Date.now()) {
-        await dbConfig.db.collection(sessionsCollection).doc(token).delete();
-        return res.status(401).json({ error: 'Unauthorized', message: 'Токен авторизации истёк.' });
-      }
-
-      req.user = {
-        uid: session.uid,
-        email: session.email,
-        role: session.role || 'user',
-        claims: { role: session.role || 'user', admin: session.role === 'admin' }
-      };
-    } else if (dbConfig.provider === 'pocketbase') {
+    {
       const payload = decodeAndValidateJwt(token);
 
       if (!payload || !payload.id || !payload.exp || payload.type !== 'auth') {
@@ -95,11 +79,6 @@ async function requireAuth(req, res, next) {
         role: 'user',
         claims: { role: 'user', admin: false }
       };
-    } else {
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Unknown database provider'
-      });
     }
 
     next();

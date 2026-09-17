@@ -120,7 +120,7 @@ window.TemplatesVisualMobile = (function() {
           tempDiv.innerHTML = logoData;
           logoSrc = (tempDiv.querySelector('img') && tempDiv.querySelector('img').src) || logoSrc;
         } else if (logoData.startsWith('data:image')) {
-          // Для Firebase или нового файла (чистый base64)
+          // Для PocketBase или нового файла (чистый base64)
           logoSrc = logoData;
         }
       }

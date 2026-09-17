@@ -1,11 +1,12 @@
 /**
- * Универсальная конфигурация базы данных для сервера
- * Поддерживает Firebase и PocketBase
+ * Конфигурация базы данных для сервера
+ *
+ * Поддерживается только PocketBase.
  */
 
 // Приоритет: .env → db-config.js → pocketbase
 let provider = process.env.DB_PROVIDER;
-if (!provider) {
+if (!provider || provider !== 'pocketbase') {
   try {
     const { DB_CONFIG } = require('../../../js/db-config');
     provider = DB_CONFIG.provider || 'pocketbase';
@@ -39,55 +40,11 @@ async function authenticateWithAppUser(client) {
 async function initializeDb() {
   if (dbInstance) return dbInstance;
 
-  if (provider === 'firebase') {
-    const admin = require('firebase-admin');
-    const projectId = process.env.FIREBASE_PROJECT_ID;
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-    const keyFilePath = process.env.FIREBASE_KEY_FILE_PATH;
+  if (provider !== 'pocketbase') {
+    throw new Error(`Unsupported DB provider: ${provider}. Only 'pocketbase' is supported.`);
+  }
 
-    try {
-      if (keyFilePath) {
-        admin.initializeApp({
-          credential: admin.credential.cert(require(keyFilePath)),
-        });
-        console.log('✅ Firebase initialized with key file');
-      } else if (projectId && clientEmail && privateKey && privateKey.includes('-----BEGIN')) {
-        admin.initializeApp({
-          credential: admin.credential.cert({
-            projectId,
-            clientEmail,
-            privateKey: privateKey.replace(/\\n/g, '\n'),
-          }),
-        });
-        console.log('✅ Firebase initialized with service account env vars');
-      } else {
-        // Fallback: ищем serviceAccountKey.json в корне проекта
-        const fs = require('fs');
-        const path = require('path');
-        const keyFile = path.join(__dirname, '..', '..', '..', 'serviceAccountKey.json');
-        if (fs.existsSync(keyFile)) {
-          admin.initializeApp({
-            credential: admin.credential.cert(require(keyFile)),
-          });
-          console.log('✅ Firebase initialized with serviceAccountKey.json');
-        } else {
-          admin.initializeApp();
-          console.log('✅ Firebase initialized with Application Default Credentials');
-        }
-      }
-
-      dbInstance = {
-        provider: 'firebase',
-        db: admin.firestore(),
-        admin,
-        client: null,
-      };
-    } catch (error) {
-      console.error('❌ Firebase initialization error:', error.message);
-      throw error;
-    }
-  } else if (provider === 'pocketbase') {
+  {
     const PocketBase = require('pocketbase').default;
 
     // Приоритет: .env → credentials.js → localhost:8090
@@ -135,8 +92,6 @@ async function initializeDb() {
       console.error('❌ PocketBase initialization error:', error.message);
       throw error;
     }
-  } else {
-    throw new Error(`Unknown DB provider: ${provider}`);
   }
 
   return dbInstance;

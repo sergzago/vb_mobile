@@ -191,7 +191,7 @@ function applyTemplate(data) {
       if (extractedSrc) {
         finalLogoSrc = extractedSrc;
       }
-    } else if (logoData.startsWith('data:image')) { // Данные из Firebase или свежезагруженный base64
+    } else if (logoData.startsWith('data:image')) { // Данные из PocketBase или свежезагруженный base64
       finalLogoSrc = logoData;
     }
   }

@@ -1,11 +1,8 @@
 /**
  * Конфигурация базы данных
  *
- * Поддерживаемые провайдеры:
- * - 'firebase'   — Firebase Firestore + Auth
- * - 'pocketbase' — PocketBase (self-hosted)
- *
- * Для переключения измените DB_CONFIG.provider
+ * Провайдер: 'pocketbase' — PocketBase (self-hosted).
+ * Поддерживается только PocketBase.
  */
 
 // ============================================================================
@@ -14,25 +11,15 @@
 
 // Для браузера — загружаем credentials из отдельного файла (подключается в HTML)
 // Для Node.js — require('./credentials.js')
-var CREDENTIALS = (typeof CREDENTIALS !== 'undefined') ? CREDENTIALS : { firebase: {}, pocketbase: {} };
+var CREDENTIALS = (typeof CREDENTIALS !== 'undefined') ? CREDENTIALS : { pocketbase: {} };
 
 // ============================================================================
 // ВЫБОР ПРОВАЙДЕРА БАЗЫ ДАННЫХ
 // ============================================================================
 
 var DB_CONFIG = {
-  // Текущий провайдер: 'firebase' | 'pocketbase'
+  // Провайдер: только 'pocketbase'
   provider: 'pocketbase',
-
-  // ============================================================================
-  // КОНФИГУРАЦИЯ СЕРВЕРА (Node.js API, используется для Firebase Admin операций)
-  // ============================================================================
-  server: CREDENTIALS.server || {},
-
-  // ============================================================================
-  // FIREBASE КОНФИГУРАЦИЯ (из credentials.js)
-  // ============================================================================
-  firebase: CREDENTIALS.firebase || {},
 
   // ============================================================================
   // POCKETBASE КОНФИГУРАЦИЯ (из credentials.js)
@@ -40,16 +27,8 @@ var DB_CONFIG = {
   pocketbase: CREDENTIALS.pocketbase || {},
 
   // ============================================================================
-  // НАЗВАНИЯ КОЛЛЕКЦИЙ (отдельно для каждого провайдера)
+  // НАЗВАНИЯ КОЛЛЕКЦИЙ
   // ============================================================================
-  firebaseCollections: {
-    VOLLEYBALL: 'volleyball1',
-    MATCHES: 'matches1',
-    USERS: 'users',
-    SESSIONS: 'sessions', // Только для Firebase
-    AUTH_LOG: 'auth_log',
-    TEMPLATES: 'templates1'
-  },
   pocketbaseCollections: {
     VOLLEYBALL: 'volleyball1',
     MATCHES: 'matches1',
@@ -101,10 +80,8 @@ var DB_CONFIG = {
 // ОБРАТНАЯ СОВМЕСТИМОСТЬ — псевдонимы для старого кода
 // ============================================================================
 
-// Определяем коллекции в зависимости от провайдера
-DB_CONFIG.collections = DB_CONFIG.provider === 'pocketbase'
-  ? DB_CONFIG.pocketbaseCollections
-  : DB_CONFIG.firebaseCollections;
+// Определяем коллекции (PocketBase)
+DB_CONFIG.collections = DB_CONFIG.pocketbaseCollections;
 
 var COLLECTIONS = DB_CONFIG.collections;
 var VOLLEYBALL_COLLECTION = COLLECTIONS.VOLLEYBALL;
@@ -116,9 +93,6 @@ var ENABLE_AUTH = DB_CONFIG.ENABLE_AUTH;
 var LOGO_FILE_NAME = DB_CONFIG.LOGO_FILE_NAME;
 var LOGO_BASE64 = DB_CONFIG.LOGO_BASE64;
 
-// Для обратной совместимости со старым кодом
-var firebaseConfig = DB_CONFIG.firebase;
-
 // ============================================================================
 // ЭКСПОРТ ДЛЯ BACKEND (Node.js/CommonJS)
 // ============================================================================
@@ -126,19 +100,18 @@ var firebaseConfig = DB_CONFIG.firebase;
 if (typeof module !== 'undefined' && module.exports) {
   var fs = require('fs');
   var path = require('path');
-  
+
   // Загружаем учетные данные для Node.js
   try {
     CREDENTIALS = require('../credentials.js');
   } catch (e) {
     console.warn('credentials.js не найден, используем пустые значения');
-    CREDENTIALS = { firebase: {}, pocketbase: {} };
+    CREDENTIALS = { pocketbase: {} };
   }
-  
+
   // Обновляем DB_CONFIG после загрузки credentials
-  DB_CONFIG.firebase = CREDENTIALS.firebase || {};
   DB_CONFIG.pocketbase = CREDENTIALS.pocketbase || {};
-  
+
   try {
     LOGO_BASE64 = fs.readFileSync(path.join(__dirname, '..', LOGO_FILE_NAME), 'utf8').trim();
   } catch (e) {
@@ -154,8 +127,7 @@ if (typeof module !== 'undefined' && module.exports) {
     GAME_CONSTANTS: GAME_CONSTANTS,
     ENABLE_AUTH: ENABLE_AUTH,
     LOGO_BASE64: LOGO_BASE64,
-    LOGO_FILE_NAME: LOGO_FILE_NAME,
-    firebaseConfig: firebaseConfig
+    LOGO_FILE_NAME: LOGO_FILE_NAME
   };
 }
 

@@ -779,30 +779,6 @@
         </div>
 
         <div class="link-item-wrap">
-          <a class="link-item" id="linkScoreboardOld" href="#" target="_blank">
-            <span class="link-icon">🖥️</span>
-            <div class="link-text">
-              <div class="link-title">Табло (старое)</div>
-              <div class="link-desc">Scoreboard — классический дизайн</div>
-            </div>
-            <span class="link-arrow">&#8250;</span>
-          </a>
-          <button class="link-copy-btn" data-target="linkScoreboardOld" title="Копировать ссылку">📋</button>
-        </div>
-
-        <div class="link-item-wrap">
-          <a class="link-item" id="linkControl" href="#" target="_blank">
-            <span class="link-icon">🎛️</span>
-            <div class="link-text">
-              <div class="link-title">Панель управления</div>
-              <div class="link-desc">Control panel — десктопная версия</div>
-            </div>
-            <span class="link-arrow">&#8250;</span>
-          </a>
-          <button class="link-copy-btn" data-target="linkControl" title="Копировать ссылку">📋</button>
-        </div>
-
-        <div class="link-item-wrap">
           <a class="link-item" id="linkTablo" href="#" target="_blank">
             <span class="link-icon">📋</span>
             <div class="link-text">
@@ -837,18 +813,6 @@
           </a>
           <button class="link-copy-btn" data-target="linkOnline" title="Копировать ссылку">📋</button>
         </div>
-
-        <div class="link-item-wrap">
-          <a class="link-item" href="index.html">
-            <span class="link-icon">🏠</span>
-            <div class="link-text">
-              <div class="link-title">Главная страница</div>
-              <div class="link-desc">Desktop интерфейс системы</div>
-            </div>
-            <span class="link-arrow">&#8250;</span>
-          </a>
-          <button class="link-copy-btn" data-target="index.html" title="Копировать ссылку">📋</button>
-        </div>
       </div>
 
       <!-- ===== TAB: ADMIN ===== -->
@@ -857,13 +821,33 @@
           <h2>Админ-панель</h2>
         </div>
 
-        <div id="adminContent">
-          <div class="card admin-card">
-            <div class="card-title"><span class="icon">🔐</span> Управление пользователями</div>
-            <p style="font-size:13px;color:rgba(255,255,255,0.7);margin-bottom:16px;">
-              Создание, редактирование и удаление пользователей системы
-            </p>
-            <a href="admin.html" target="_blank" class="btn btn-primary btn-block">Открыть админ-панель</a>
+        <div id="adminContent" style="display:none;">
+          <div id="adminAlert" class="admin-alert" style="display:none;"></div>
+
+          <div class="card">
+            <div class="card-title"><span class="icon">➕</span> Добавить пользователя</div>
+            <form id="adminAddUserForm" class="admin-form">
+              <input type="text" id="adminNewUsername" required
+                     placeholder="Имя пользователя (латиница)" pattern="[a-zA-Z0-9_]+" autocomplete="off">
+              <input type="password" id="adminNewPassword" required
+                     placeholder="Пароль (минимум 8 символов)" minlength="8">
+              <input type="text" id="adminNewDisplayName" placeholder="Имя для отображения">
+              <select id="adminNewRole">
+                <option value="user">Пользователь</option>
+                <option value="admin">Администратор</option>
+              </select>
+              <button type="submit" class="btn btn-primary btn-block">Создать пользователя</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span class="icon">👥</span> Пользователи системы
+              <button type="button" class="admin-refresh-btn" id="adminRefreshBtn" title="Обновить">⟳</button>
+            </div>
+            <div id="adminUsersList">
+              <div class="loading"><div class="spinner"></div> Загрузка...</div>
+            </div>
           </div>
 
           <div class="card">
@@ -1138,11 +1122,46 @@
     </div>
   </div>
 
+  <!-- MODAL: Admin — edit user -->
+  <div id="adminEditUserModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header"><h3>✏️ Редактирование пользователя</h3></div>
+      <div class="modal-body">
+        <form id="adminEditUserForm" class="admin-form">
+          <input type="hidden" id="adminEditUid">
+          <input type="email" id="adminEditEmail" required placeholder="Email">
+          <input type="password" id="adminEditPassword" placeholder="Новый пароль (мин. 8 симв., пусто = не менять)" minlength="8">
+          <input type="text" id="adminEditDisplayName" placeholder="Имя для отображения">
+          <select id="adminEditRole">
+            <option value="user">Пользователь</option>
+            <option value="admin">Администратор</option>
+          </select>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="adminEditCancel">Отмена</button>
+        <button class="btn btn-primary" id="adminEditSave">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Admin — login history -->
+  <div id="adminHistoryModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header"><h3>🕓 История входов</h3></div>
+      <div class="modal-body" id="adminHistoryBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="adminHistoryClose">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <!-- NOTIFICATION (templates editor) -->
   <div class="notification" id="notification"></div>
 
   <script src="js/common.js"></script>
   <script src="js/mobile.js"></script>
   <script src="js/templates_visual_mobile.js"></script>
+  <script src="js/mobile-admin.js"></script>
 </body>
 </html>

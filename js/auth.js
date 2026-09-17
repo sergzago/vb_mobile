@@ -1,6 +1,6 @@
 /**
  * Общий модуль авторизации для клиентских страниц
- * Работает через единый DB интерфейс (Firebase / PocketBase)
+ * Работает через единый DB интерфейс (PocketBase)
  * Подключается после db-config.js и db-interface.js
  */
 
@@ -19,10 +19,11 @@ window.AuthModule = (function() {
     /**
      * Проверка авторизации пользователя
      * @param {string} requiredRole - Требуемая роль ('user' или 'admin')
-     * @param {string} redirectUrl - URL для перенаправления если не авторизован (null для возврата false)
+     * @param {string|null} redirectUrl - URL для перенаправления если не авторизован
+     *        (null — страница сама обрабатывает неавторизованное состояние)
      * @returns {Promise<boolean>} - true если авторизован
      */
-    async function checkAuth(requiredRole = 'user', redirectUrl = 'login.html') {
+    async function checkAuth(requiredRole = 'user', redirectUrl = 'mobile.html') {
         // Если авторизация отключена, всегда возвращаем true
         if (!isAuthEnabled) {
             currentRole = requiredRole === 'admin' ? 'admin' : 'user';
@@ -40,9 +41,9 @@ window.AuthModule = (function() {
         return new Promise((resolve, reject) => {
             DB.auth.onAuthStateChanged(async (user) => {
                 if (!user) {
-                    // Проверяем, если redirectUrl явно указан как null, то не перенаправляем
-                    // Также проверяем, если мы в процессе logout, не перенаправляем
-                    if (redirectUrl !== null && redirectUrl && redirectUrl !== 'login.html') {
+                    // Перенаправляем только если redirectUrl задан явно.
+                    // При logout (skipRedirectOnLogout) страница остаётся на месте.
+                    if (!skipRedirectOnLogout && redirectUrl !== null && redirectUrl) {
                         window.location.href = redirectUrl;
                     }
                     resolve(false);
@@ -54,9 +55,10 @@ window.AuthModule = (function() {
 
                 // Проверяем роль
                 if (requiredRole === 'admin' && currentRole !== 'admin') {
-                    // Если требуется админ, а у пользователя роль user
+                    // Если требуется админ, а у пользователя роль user —
+                    // отправляем в мобильный интерфейс
                     if (redirectUrl !== null && redirectUrl) {
-                        window.location.href = 'ctl.html';
+                        window.location.href = 'mobile.html';
                     }
                     resolve(false);
                     return;
@@ -99,12 +101,12 @@ window.AuthModule = (function() {
       * Выход из системы
       * @returns {Promise<void>}
       */
-     async function logout() {
-         // Если авторизация отключена, просто перенаправляем на главную
-         if (!isAuthEnabled) {
-             window.location.href = 'index.html';
-             return;
-         }
+         async function logout() {
+          // Если авторизация отключена, просто остаёмся в мобильном интерфейсе
+          if (!isAuthEnabled) {
+              window.location.href = 'mobile.html';
+              return;
+          }
 
          try {
              // Убеждаемся что DB инициализирован
@@ -113,17 +115,20 @@ window.AuthModule = (function() {
              } catch (error) {
                  console.error('Failed to initialize DB in logout:', error);
              }
+             // При выходе не перенаправляем — показываем форму входа
+             skipRedirectOnLogout = true;
              await DB.auth.logout();
              currentUser = null;
              currentRole = null;
              idToken = null;
-             // Не перенаправляем на login.html, оставляем пользователя на текущей странице
+             skipRedirectOnLogout = false;
              // Обновляем UI для отображения состояния "не авторизован"
              if (typeof window.updateUserInfo === 'function') {
                  window.updateUserInfo();
              }
          } catch (error) {
              console.error('Logout error:', error);
+             skipRedirectOnLogout = false;
              // Даже при ошибке обновляем UI
              currentUser = null;
              currentRole = null;
@@ -160,7 +165,8 @@ window.AuthModule = (function() {
     }
 
     /**
-     * Firebase auth object (для обратной совместимости)
+     * Доступ к внутреннему auth-объекту провайдера
+     * (обратная совместимость — используется только для нативных вызовов)
      * Lazy getter — возвращает null если DB ещё не инициализирован
      */
     function getAuth() {

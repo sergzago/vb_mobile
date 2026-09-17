@@ -6,10 +6,10 @@ function errorHandler(err, req, res, next) {
 
   const msg = err.message || '';
 
-  if (err.code === 'FIREBASE_NOT_CONFIGURED' || msg.includes('Firestore not initialized')) {
+  if (err.code === 'DB_NOT_CONFIGURED' || msg.includes('not configured')) {
     return res.status(503).json({
       error: 'Service Unavailable',
-      message: 'Firestore not configured. Set Firebase credentials in .env',
+      message: 'PocketBase not configured. Check .env / credentials.js',
     });
   }
 
