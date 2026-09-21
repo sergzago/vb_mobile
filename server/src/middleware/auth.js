@@ -32,9 +32,38 @@ function decodeAndValidateJwt(token) {
 }
 
 /**
+ * Проверяет, отключена ли авторизация (гостевой режим, ENABLE_AUTH=0).
+ *
+ * Приоритет: переменная окружения → credentials.js/db-config.js
+ * (значение уже разрешено в DB_CONFIG.ENABLE_AUTH).
+ *
+ * В гостевом режиме токен не выдаётся, поэтому серверные маршруты
+ * (создание игры, шаблоны и т.п.) должны работать без него.
+ */
+function isAuthDisabled() {
+  try {
+    const { DB_CONFIG } = require('../../../js/db-config');
+    return Number(DB_CONFIG.ENABLE_AUTH) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Middleware для проверки аутентификации пользователя
  */
 async function requireAuth(req, res, next) {
+  // Гостевой режим: авторизация отключена — пропускаем запрос без токена
+  if (isAuthDisabled()) {
+    req.user = {
+      uid: 'guest',
+      email: '',
+      role: 'guest',
+      claims: { role: 'guest', admin: false }
+    };
+    return next();
+  }
+
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -142,5 +171,6 @@ function requireRole(...allowedRoles) {
 module.exports = {
   requireAuth,
   requireAdmin,
-  requireRole
+  requireRole,
+  isAuthDisabled
 };

@@ -7,7 +7,8 @@ Realtime-обновления (мгновенная синхронизация �
 
 Клиент загружает SDK `pocketbase@0.26.8` (`js/db-interface.js`).
 Формат realtime-подписок изменился в PocketBase **v0.23**, поэтому сервер
-должен быть **не ниже 0.23**. В `docker-compose.yml` задано `PB_VERSION=0.26.1`.
+должен быть **не ниже 0.23**. Версия PocketBase задаётся в `dockerfile.pb`
+(и переопределяется переменной `PB_VERSION` в `docker-compose.pb.yml`).
 
 При смене SDK не забудьте обновить и сервер, и наоборот.
 

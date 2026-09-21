@@ -2,6 +2,15 @@
  * Конфигурация базы данных для сервера
  *
  * Поддерживается только PocketBase.
+ *
+ * ВАЖНО: pocketbase@0.21.0 — ESM-модуль.
+ * Для работы с CommonJS используется динамический import().
+ *
+ * REGRESSION-PROTECTION:
+ * Если PocketBase недоступен (например, не запущен или нет доступа к ghcr.io),
+ * функция initializeDb() НЕ бросает ошибку, а возвращает объект с
+ * dbInstance.degraded = true. Это позволяет API-серверу и Swagger UI
+ * работать в режиме «только документация + статика» без БД.
  */
 
 // Приоритет: .env → db-config.js → pocketbase
@@ -17,6 +26,9 @@ if (!provider || provider !== 'pocketbase') {
 
 let dbInstance = null;
 
+/**
+ * Аутентификация как приложение (app_user)
+ */
 async function authenticateWithAppUser(client) {
   let userEmail, userPassword;
   try {
@@ -35,63 +47,98 @@ async function authenticateWithAppUser(client) {
 
 /**
  * Инициализация соединения с БД
- * @returns {Promise<{db: object, admin: object|null, client: object|null}>}
+ * @returns {Promise<{db: object, admin: object|null, client: object|null, degraded: boolean}>}
+ *         degraded=true если БД недоступна (API работает в ограниченном режиме)
  */
 async function initializeDb() {
   if (dbInstance) return dbInstance;
 
   if (provider !== 'pocketbase') {
-    throw new Error(`Unsupported DB provider: ${provider}. Only 'pocketbase' is supported.`);
+    console.error(`❌ Unsupported DB provider: ${provider}. Only 'pocketbase' is supported.`);
+    // Graceful degradation: не летим, а работаем без БД
+    dbInstance = {
+      provider,
+      db: null,
+      admin: null,
+      client: null,
+      degraded: true,
+      error: `Unsupported DB provider: ${provider}`,
+    };
+    return dbInstance;
   }
 
-  {
-    const PocketBase = require('pocketbase').default;
+  // Динамический import для ESM-модуля pocketbase
+  let PocketBase, client;
+  try {
+    const PocketBaseModule = await import('pocketbase');
+    PocketBase = PocketBaseModule.default;
+  } catch (importError) {
+    console.error('❌ Failed to import pocketbase module:', importError.message);
+    dbInstance = {
+      provider: 'pocketbase',
+      db: null,
+      admin: null,
+      client: null,
+      degraded: true,
+      error: `Cannot import pocketbase: ${importError.message}`,
+    };
+    return dbInstance;
+  }
 
-    // Приоритет: .env → credentials.js → localhost:8090
-    let url = process.env.POCKETBASE_URL;
-    let adminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
-    let adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
+  // Приоритет: .env → credentials.js → localhost:8090
+  let url = process.env.POCKETBASE_URL;
+  let adminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
+  let adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
 
-    if (!url) {
-      try {
-        const creds = require('../../../credentials.js');
-        if (creds.pocketbase && creds.pocketbase.url) {
-          url = creds.pocketbase.url;
-          console.log('ℹ️ PocketBase URL loaded from credentials.js');
-        }
-      } catch {}
-    }
-
-    url = url || 'http://localhost:8090';
-    adminEmail = adminEmail || 'admin@example.com';
-    adminPassword = adminPassword || '';
-
+  if (!url) {
     try {
-      const client = new PocketBase(url);
+      const creds = require('../../../credentials.js');
+      if (creds.pocketbase && creds.pocketbase.url) {
+        url = creds.pocketbase.url;
+        console.log('ℹ️ PocketBase URL loaded from credentials.js');
+      }
+    } catch {}
+  }
 
-      // Авторизуемся как админ для серверных операций
-      if (adminEmail && adminPassword) {
-        try {
-          await client.admins.authWithPassword(adminEmail, adminPassword);
-          console.log('✅ PocketBase admin authenticated');
-        } catch {
-          console.log('⚠️ PocketBase admin auth failed, trying app_users...');
-          await authenticateWithAppUser(client);
-        }
-      } else {
+  url = url || 'http://localhost:8090';
+  adminEmail = adminEmail || 'admin@example.com';
+  adminPassword = adminPassword || '';
+
+  try {
+    client = new PocketBase(url);
+
+    // Авторизуемся как админ для серверных операций
+    if (adminEmail && adminPassword) {
+      try {
+        await client.admins.authWithPassword(adminEmail, adminPassword);
+        console.log('✅ PocketBase admin authenticated');
+      } catch {
+        console.log('⚠️ PocketBase admin auth failed, trying app_users...');
         await authenticateWithAppUser(client);
       }
-
-      dbInstance = {
-        provider: 'pocketbase',
-        db: null,
-        admin: null,
-        client,
-      };
-    } catch (error) {
-      console.error('❌ PocketBase initialization error:', error.message);
-      throw error;
+    } else {
+      await authenticateWithAppUser(client);
     }
+
+    dbInstance = {
+      provider: 'pocketbase',
+      db: null,
+      admin: null,
+      client,
+      degraded: false,
+      error: null,
+    };
+  } catch (error) {
+    console.error('❌ PocketBase initialization error:', error.message);
+    // Graceful degradation: не летим, а работаем без БД
+    dbInstance = {
+      provider: 'pocketbase',
+      db: null,
+      admin: null,
+      client: null,
+      degraded: true,
+      error: error.message,
+    };
   }
 
   return dbInstance;

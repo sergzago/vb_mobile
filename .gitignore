@@ -4,3 +4,10 @@ node_modules/*
 serviceAccountKey.json
 server/serviceAccountKey.json
 password.json
+credentials.local.js
+
+# Данные PocketBase (SQLite + загрузки) — создаются контейнером
+pb_data/
+
+# Секреты окружения
+.env

@@ -1,0 +1,78 @@
+# ================================
+# Volleyball Scoreboard - PocketBase (docker-compose.pb.yml)
+# ================================
+# Отдельный файл только с сервисом PocketBase (образ собирается из
+# ./dockerfile.pb — бинарник скачивается с официального GitHub-релиза,
+# доступ к ghcr.io не нужен).
+#
+# Подключается к основному docker-compose.yml (server + frontend) двумя способами:
+#
+#   1) Автоматически — через переменную COMPOSE_FILE в .env:
+#        COMPOSE_FILE=docker-compose.yml:docker-compose.pb.yml
+#      тогда `docker compose up -d` поднимает весь стек:
+#      pocketbase + server + frontend
+#
+#   2) Явно — флагами:
+#        docker compose -f docker-compose.yml -f docker-compose.pb.yml up -d --build
+#
+# Файл также добавляет сервису server ожидание готовности PocketBase
+# (depends_on: condition: service_healthy), поэтому запускать его отдельно
+# от docker-compose.yml нельзя — нужен базовый файл.
+#
+# Без PocketBase (внешняя/хостовая БД):
+#        docker compose -f docker-compose.yml up -d
+#
+# Первый запуск — инициализируйте БД (суперпользователь, коллекции и сервисный
+# пользователь app_users) одной командой из корня репозитория:
+#   ./scripts/init-pocketbase.sh
+# Скрипт создаёт суперпользователя в контейнере PocketBase, структуру БД из
+# pocketbase_collections_export.json и перезапускает API-сервер.
+#
+# Данные PocketBase (SQLite + загрузки) хранятся на хосте в ./pb_data
+# ================================
+
+services:
+  # Имя сервиса pocketbase используется в POCKETBASE_URL=http://pocketbase:8090
+  pocketbase:
+    build:
+      context: .
+      dockerfile: dockerfile.pb
+      args:
+        # Зафиксируйте версию, чтобы избежать неожиданных обновлений
+        PB_VERSION: "${PB_VERSION:-0.36.6}"
+    image: vb_mobile-pocketbase:${PB_VERSION:-0.36.6}
+    container_name: volleyball_pb
+    restart: unless-stopped
+    ports:
+      - "${POCKETBASE_PORT:-8090}:8090"
+    volumes:
+      # Данные (SQLite, загрузки) сохраняются на хосте
+      - ./pb_data:/pb/pb_data
+      # (Опционально) JS-хуки
+      # - ./pb_hooks:/pb/pb_hooks:ro
+      # (Опционально) Миграции
+      # - ./pb_migrations:/pb/pb_migrations:ro
+    environment:
+      # Ограничение памяти полезно для слабых серверов
+      - GOMEMLIMIT=${POCKETBASE_MEMORY_LIMIT:-512MiB}
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+    healthcheck:
+      # busybox wget (alpine) принимает --no-verbose/--tries (как no-op) и --spider
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8090/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Патч сервиса server из docker-compose.yml: API стартует только после того,
+  # как PocketBase прошёл healthcheck (иначе сервер подключится к ещё не готовой
+  # БД и перейдёт в degraded-режим до перезапуска).
+  server:
+    depends_on:
+      pocketbase:
+        condition: service_healthy
+
+

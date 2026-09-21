@@ -19,7 +19,11 @@ var CREDENTIALS = {
   // POCKETBASE УЧЕТНЫЕ ДАННЫЕ
   // ============================================================================
   pocketbase: {
-    url: 'https://your-domain.com/pb/',
+    // URL для браузера (PocketBase SDK). '/pb/' — same-origin путь,
+    // который nginx фронтенда проксирует в контейнер pocketbase (nginx.conf).
+    // Так приложение работает и по http://localhost:8080, и по https://домен —
+    // без CORS и без указания протокола/порта.
+    url: '/pb/',
     // Администратор (для управления пользователями)
     adminEmail: 'admin@example.com',
     adminPassword: 'your_admin_password',

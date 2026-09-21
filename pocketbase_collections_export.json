@@ -803,7 +803,7 @@
         "type": "bool"
       },
       {
-        "id": "number839833857",
+        "id": "number8902347155",
         "name": "prev_show",
         "onlyInt": false,
         "required": false,
@@ -826,7 +826,7 @@
       },
       {
         "hidden": false,
-        "id": "bool1847182103",
+        "id": "bool9173456290",
         "name": "beach_mode",
         "presentable": false,
         "required": false,
@@ -1105,6 +1105,51 @@
         "required": false,
         "system": false,
         "type": "date"
+      },
+      {
+        "id": "number2281940631",
+        "name": "home_timeouts",
+        "type": "number",
+        "required": false,
+        "presentable": false,
+        "system": false,
+        "hidden": false,
+        "onlyInt": true,
+        "min": 0,
+        "max": null
+      },
+      {
+        "id": "number3549027188",
+        "name": "away_timeouts",
+        "type": "number",
+        "required": false,
+        "presentable": false,
+        "system": false,
+        "hidden": false,
+        "onlyInt": true,
+        "min": 0,
+        "max": null
+      },
+      {
+        "id": "number6104837529",
+        "name": "count_timeouts",
+        "type": "number",
+        "required": false,
+        "presentable": false,
+        "system": false,
+        "hidden": false,
+        "onlyInt": true,
+        "min": 0,
+        "max": null
+      },
+      {
+        "id": "bool7741209563",
+        "name": "custom_mode",
+        "type": "bool",
+        "required": false,
+        "presentable": false,
+        "system": false,
+        "hidden": false
       }
     ],
     "indexes": [],

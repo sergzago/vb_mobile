@@ -1,44 +1,101 @@
 /**
- * Конфигурация базы данных
+ * Конфигурация базы данных (универсальная: браузер + Node.js)
  *
- * Провайдер: 'pocketbase' — PocketBase (self-hosted).
- * Поддерживается только PocketBase.
+ * Браузер:
+ *   - подключается в HTML ДО js/auth.js и js/mobile.js
+ *   - DB_CONFIG собирается из глобального объекта CREDENTIALS (credentials.js)
+ *   - ENABLE_AUTH и DB_CONFIG экспортируются в window
+ *
+ * Node.js (server/src/config/db.js, services/dbAdapter.js):
+ *   - приоритет настроек: переменные окружения (.env) → credentials.js → этот файл
+ *
+ * Используется сервером для:
+ *   - настройки пути к файлу лога авторизации (AUTH_LOG_FILE)
+ *   - названий коллекций PocketBase и констант матча
  */
 
 // ============================================================================
 // ИМПОРТ УЧЕТНЫХ ДАННЫХ
 // ============================================================================
 
-// Для браузера — загружаем credentials из отдельного файла (подключается в HTML)
-// Для Node.js — require('./credentials.js')
-var CREDENTIALS = (typeof CREDENTIALS !== 'undefined') ? CREDENTIALS : { pocketbase: {} };
+// Для браузера — credentials.js подключается в HTML перед этим файлом
+// (глобальная переменная CREDENTIALS уже определена).
+// Для Node.js — require('../credentials.js')
+var _CREDENTIALS = (typeof CREDENTIALS !== 'undefined' && CREDENTIALS)
+  ? CREDENTIALS
+  : { server: {}, pocketbase: {} };
 
-// ============================================================================
-// ВЫБОР ПРОВАЙДЕРА БАЗЫ ДАННЫХ
-// ============================================================================
+// В Node.js догружаем credentials.js, если их нет (например, файл подключён напрямую)
+if (typeof module !== 'undefined' && module.exports && (!_CREDENTIALS.pocketbase || !_CREDENTIALS.pocketbase.url)) {
+  try {
+    _CREDENTIALS = require('../credentials.js');
+  } catch (e) {
+    console.warn('credentials.js не найден, используем пустые значения');
+  }
+}
 
-var DB_CONFIG = {
-  // Провайдер: только 'pocketbase'
-  provider: 'pocketbase',
+// Безопасное чтение переменных окружения (в браузере process не определён)
+function _env(name) {
+  if (typeof process !== 'undefined' && process && process.env) {
+    return process.env[name];
+  }
+  return undefined;
+}
+
+/**
+ * Режим авторизации: 1 — вход обязателен (по умолчанию), 0 — гостевой режим.
+ *
+ * Приоритет:
+ *   1) переменная окружения ENABLE_AUTH (сервер: .env / docker-compose);
+ *   2) credentials.js → auth.enabled (единый источник для браузера и сервера);
+ *   3) 1 — авторизация включена.
+ *
+ * В браузере process.env недоступен, поэтому для фронтенда значение берётся
+ * из credentials.js (auth.enabled) — этот файл подключается в HTML до db-config.js.
+ */
+function _resolveEnableAuth() {
+  var envValue = _env('ENABLE_AUTH');
+  if (envValue !== undefined && envValue !== '') {
+    return Number(envValue) === 0 ? 0 : 1;
+  }
+  if (_CREDENTIALS.auth && _CREDENTIALS.auth.enabled !== undefined && _CREDENTIALS.auth.enabled !== null) {
+    return Number(_CREDENTIALS.auth.enabled) === 0 ? 0 : 1;
+  }
+  return 1;
+}
+
+/**
+ * Конфигурация базы данных
+ */
+const DB_CONFIG = {
+  // Включение/отключение авторизации
+  // 1 — авторизация включена (по умолчанию), 0 — режим гостя без входа
+  // (в гостевом режиме доступны создание/подключение игры и шаблоны)
+  ENABLE_AUTH: _resolveEnableAuth(),
+
+  // Провайдер базы данных (pocketbase | firebase)
+  // Переопределяется переменной окружения DB_PROVIDER
+  provider: _env('DB_PROVIDER') || 'pocketbase',
+
+  // Учетные данные провайдеров (из credentials.js)
+  server: _CREDENTIALS.server || {},
+  pocketbase: _CREDENTIALS.pocketbase || {},
+
+  // URL PocketBase (используется только если provider=pocketbase)
+  // Переопределяется переменной окружения POCKETBASE_URL
+  pocketbaseUrl: _env('POCKETBASE_URL') || (_CREDENTIALS.pocketbase && _CREDENTIALS.pocketbase.url) || 'http://localhost:8090',
 
   // ============================================================================
-  // POCKETBASE КОНФИГУРАЦИЯ (из credentials.js)
+  // НАЗВАНИЯ КОЛЛЕКЦИЙ POCKETBASE
   // ============================================================================
-  pocketbase: CREDENTIALS.pocketbase || {},
-
-  // ============================================================================
-  // НАЗВАНИЯ КОЛЛЕКЦИЙ
-  // ============================================================================
-  pocketbaseCollections: {
-    VOLLEYBALL: 'volleyball1',
-    MATCHES: 'matches1',
-    USERS: 'scoreusers',
+  collections: {
+    VOLLEYBALL: _env('POCKETBASE_VOLLEYBALL_COLLECTION') || 'volleyball',
+    MATCHES: _env('POCKETBASE_MATCHES_COLLECTION') || 'matches',
+    USERS: _env('POCKETBASE_USERS_COLLECTION') || 'scoreusers',
+    // Коллекция шаблонов оформления табло (используется DB.templates)
+    TEMPLATES: _env('POCKETBASE_TEMPLATES_COLLECTION') || 'templates',
     AUTH_LOG: 'auth_log',
-    TEMPLATES: 'templates1'
   },
-
-  // Техническая коллекция для обычных пользователей приложения (не для бизнес-логики)
-  pocketbaseAppUsersCollection: 'app_users',
 
   // ============================================================================
   // КОНСТАНТЫ МАТЧА
@@ -51,103 +108,43 @@ var DB_CONFIG = {
     CLASSIC_MAX_SETS: 5,
     CLASSIC_SETS_TO_WIN_TWO: 2,
     CLASSIC_MAX_SETS_TWO: 3,
-    CLASSIC_TIEBREAK_POINTS_TO_WIN: 15
+    CLASSIC_TIEBREAK_POINTS_TO_WIN: 15,
   },
-
-  // ============================================================================
-  // ПАРАМЕТРЫ АВТОРИЗАЦИИ
-  // ============================================================================
-  ENABLE_AUTH: 1, // 1 — включить, 0 — отключить
-  SESSION_EXPIRY_DAYS: 3, // Срок жизни сессии в днях
-
-  // ============================================================================
-  // ЛОГИРОВАНИЕ АУТЕНТИФИКАЦИИ
-  // ============================================================================
-  // Таймаут (в секундах) ожидания ответа при входе в систему.
-  // По истечении таймаута выводится ошибка и событие логируется.
-  AUTH_LOGIN_TIMEOUT_SECONDS: 15,
-  // Путь к файлу лога аутентификации (используется сервером, когда БД недоступна)
-  AUTH_LOG_FILE: 'logs/auth_log.log',
-
-  // ============================================================================
-  // НАСТРОЙКИ ЛОГОТИПА
-  // ============================================================================
-  LOGO_FILE_NAME: 'logo_base64.txt',
-  LOGO_BASE64: ''
 };
 
 // ============================================================================
-// ОБРАТНАЯ СОВМЕСТИМОСТЬ — псевдонимы для старого кода
+// СЕРВЕРНЫЕ НАСТРОЙКИ (только Node.js — в браузере path недоступен)
 // ============================================================================
-
-// Определяем коллекции (PocketBase)
-DB_CONFIG.collections = DB_CONFIG.pocketbaseCollections;
-
-var COLLECTIONS = DB_CONFIG.collections;
-var VOLLEYBALL_COLLECTION = COLLECTIONS.VOLLEYBALL;
-var MATCHES_COLLECTION = COLLECTIONS.MATCHES;
-var USERS_COLLECTION = COLLECTIONS.USERS;
-var TEMPLATES_COLLECTION = COLLECTIONS.TEMPLATES;
-var GAME_CONSTANTS = DB_CONFIG.constants;
-var ENABLE_AUTH = DB_CONFIG.ENABLE_AUTH;
-var LOGO_FILE_NAME = DB_CONFIG.LOGO_FILE_NAME;
-var LOGO_BASE64 = DB_CONFIG.LOGO_BASE64;
-
-// ============================================================================
-// ЭКСПОРТ ДЛЯ BACKEND (Node.js/CommonJS)
-// ============================================================================
-
 if (typeof module !== 'undefined' && module.exports) {
-  var fs = require('fs');
-  var path = require('path');
-
-  // Загружаем учетные данные для Node.js
-  try {
-    CREDENTIALS = require('../credentials.js');
-  } catch (e) {
-    console.warn('credentials.js не найден, используем пустые значения');
-    CREDENTIALS = { pocketbase: {} };
-  }
-
-  // Обновляем DB_CONFIG после загрузки credentials
-  DB_CONFIG.pocketbase = CREDENTIALS.pocketbase || {};
-
-  try {
-    LOGO_BASE64 = fs.readFileSync(path.join(__dirname, '..', LOGO_FILE_NAME), 'utf8').trim();
-  } catch (e) {
-    LOGO_BASE64 = '';
-  }
-
-  module.exports = {
-    DB_CONFIG: DB_CONFIG,
-    CREDENTIALS: CREDENTIALS,
-    COLLECTIONS: COLLECTIONS,
-    VOLLEYBALL_COLLECTION: VOLLEYBALL_COLLECTION,
-    MATCHES_COLLECTION: MATCHES_COLLECTION,
-    GAME_CONSTANTS: GAME_CONSTANTS,
-    ENABLE_AUTH: ENABLE_AUTH,
-    LOGO_BASE64: LOGO_BASE64,
-    LOGO_FILE_NAME: LOGO_FILE_NAME
-  };
+  const path = require('path');
+  // Путь к файлу лога авторизации
+  // По умолчанию: ./logs/auth.log (относительно корня проекта)
+  DB_CONFIG.AUTH_LOG_FILE = _env('AUTH_LOG_FILE') || path.join(__dirname, '..', 'logs', 'auth.log');
 }
 
 // ============================================================================
-// ЗАГРУЗКА ЛОГОТИПА (браузер)
+// ОБРАТНАЯ СОВМЕСТИМОСТЬ — псевдонимы для старого кода (dbAdapter.js, common.js и др.)
 // ============================================================================
+const VOLLEYBALL_COLLECTION = DB_CONFIG.collections.VOLLEYBALL;
+const MATCHES_COLLECTION = DB_CONFIG.collections.MATCHES;
+const USERS_COLLECTION = DB_CONFIG.collections.USERS;
+const GAME_CONSTANTS = DB_CONFIG.constants;
 
-function loadLogo(callback) {
-  fetch(LOGO_FILE_NAME)
-    .then(function(response) {
-      if (response.ok) return response.text();
-      throw new Error('Файл логотипа не найден');
-    })
-    .then(function(text) {
-      LOGO_BASE64 = text.trim();
-      DB_CONFIG.LOGO_BASE64 = LOGO_BASE64;
-      if (callback) callback(LOGO_BASE64);
-    })
-    .catch(function(error) {
-      console.error('Ошибка загрузки логотипа:', error);
-      if (callback) callback('');
-    });
+// Глобальные переменные для фронтенда (js/auth.js и js/mobile.js проверяют ENABLE_AUTH;
+// этот файл подключается в браузере ДО auth.js/mobile.js)
+if (typeof window !== 'undefined') {
+  window.ENABLE_AUTH = DB_CONFIG.ENABLE_AUTH;
+  window.DB_CONFIG = DB_CONFIG;
+}
+
+// Экспорт для Node.js
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    DB_CONFIG,
+    VOLLEYBALL_COLLECTION,
+    MATCHES_COLLECTION,
+    USERS_COLLECTION,
+    GAME_CONSTANTS,
+    ENABLE_AUTH: DB_CONFIG.ENABLE_AUTH,
+  };
 }

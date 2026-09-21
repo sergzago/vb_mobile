@@ -209,10 +209,42 @@
 
   // ===== AUTH =====
 
+  /**
+   * Права гостевого режима (ENABLE_AUTH=0 — работа без авторизации).
+   * Без входа должны быть доступны создание/подключение игры и редактор
+   * шаблонов. Вкладка «Админ» (управление пользователями) остаётся скрытой,
+   * т.к. требует авторизации.
+   */
+  function applyGuestPermissions() {
+    var connectBtn = document.getElementById('connectGameBtn');
+    if (connectBtn) {
+      connectBtn.disabled = false;
+      connectBtn.title = '';
+    }
+    var templatesTab = document.querySelector('.tab-btn[data-tab="pageTemplates"]');
+    if (templatesTab) {
+      templatesTab.classList.remove('admin-hidden');
+    }
+  }
+
   function initAuth() {
     if (typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0) {
       showApp();
       document.getElementById('mobileUserInfo').textContent = 'Гость';
+      // Гостевой режим: игра и шаблоны доступны без входа
+      applyGuestPermissions();
+      // БД нужна и без авторизации: правила PocketBase для коллекций
+      // volleyball/matches/templates допускают публичный доступ.
+      // Список шаблонов перечитываем после init — showApp() вызывается раньше,
+      // когда SDK ещё не загружен (и его вызов не срабатывает).
+      DB.init().then(function() {
+        loadGamesList();
+        if (typeof loadMobileTemplateSelect === 'function') {
+          loadMobileTemplateSelect();
+        }
+      }).catch(function(err) {
+        console.error('[Mobile] Guest DB init failed:', err);
+      });
       return;
     }
 

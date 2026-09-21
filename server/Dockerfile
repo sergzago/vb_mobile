@@ -1,21 +1,22 @@
-# Используем официальный образ Node.js 18
 FROM node:18-alpine
 
-# Устанавливаем рабочую директорию в контейнере
 WORKDIR /usr/src/app
 
-# Копируем package.json и package-lock.json для установки зависимостей
-COPY package*.json ./
-
 # Устанавливаем зависимости
-RUN npm install
+COPY package*.json ./
+RUN npm ci --only=production
 
-# Копируем остальные файлы приложения
-# Используем .dockerignore, чтобы исключить node_modules и .env
+# Копируем исходный код
 COPY . .
 
-# Открываем порт, на котором будет работать приложение
+# Делаем файлы доступными для пользователя node
+RUN chown -R node:node /usr/src/app
+
+# Порт, который слушает приложение
 EXPOSE 3000
 
-# Команда для запуска приложения
-CMD [ "npm", "start" ]
+# Не запускаем от root для безопасности
+USER node
+
+# Запуск приложения
+CMD [ "node", "src/index.js" ]

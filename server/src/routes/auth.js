@@ -34,7 +34,8 @@ let pbReaderClient = null;
 async function getPbReaderClient() {
   if (pbReaderClient) return pbReaderClient;
 
-  const PocketBase = require('pocketbase').default;
+  const PocketBaseModule = await import('pocketbase');
+  const PocketBase = PocketBaseModule.default;
   let pbUrl = process.env.POCKETBASE_URL;
   if (!pbUrl) {
     try {
@@ -100,7 +101,8 @@ router.post('/login', async (req, res) => {
       // PocketBase: авторизуемся через коллекцию scoreusers
       // Создаём отдельный клиент БЕЗ admin-сессии для user-auth,
       // чтобы токен админа не конфликтовал с авторизацией пользователя
-      const PocketBase = require('pocketbase').default;
+      const PocketBaseModule = await import('pocketbase');
+      const PocketBase = PocketBaseModule.default;
       let pbUrl = process.env.POCKETBASE_URL;
       if (!pbUrl) {
         try {
@@ -304,9 +306,10 @@ router.post('/log', async (req, res) => {
   // Пытаемся записать в БД (auth_log коллекция)
   try {
     const dbConfig = req.app.locals.db;
-    if (dbConfig && dbConfig.db) {
+    // Для PocketBase данные доступны через client (поле db всегда null)
+    if (dbConfig && dbConfig.client) {
       const authLogCollection = process.env.AUTH_LOG_COLLECTION || 'auth_log';
-      if (dbConfig.provider === 'pocketbase' && dbConfig.client) {
+      if (dbConfig.provider === 'pocketbase') {
         await dbConfig.client.collection(authLogCollection).create(logData);
       }
       return res.json({ ok: true, target: 'db' });
