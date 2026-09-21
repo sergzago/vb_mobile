@@ -4,21 +4,20 @@ info:
   description: |
     API для управления табло волейбольного матча и системой авторизации.
 
-    ## Провайдеры данных
-    Система поддерживает два провайдера, переключаемых через переменную окружения `DB_PROVIDER`:
-    - **firebase** — Firebase Firestore + Firebase Auth
-    - **pocketbase** — PocketBase (self-hosted)
+    ## Провайдер данных
+    Данные хранятся в **PocketBase** (self-hosted), провайдер задаётся
+    переменной окружения `DB_PROVIDER=pocketbase`.
 
     ## Аутентификация
     1. Получите токен через `POST /api/auth/login`
     2. Используйте его в заголовке `Authorization: Bearer <token>` для защищённых эндпоинтов
     Все эндпоинты `/api/scoreboard/*` и `/api/matches/*` требуют авторизации.
-    Только `/api/auth/login` и `/health` доступны без токена.
+    Только `/api/auth/login`, `/api/auth/log` и `/health` доступны без токена.
 
     ## Управление пользователями
     Создание, редактирование и удаление пользователей осуществляется **не через API**,
-    а через админ-панель провайдера:
-    - **Firebase Console** → Authentication → Users
+    а через админ-панель:
+    - админ-панель мобильного интерфейса (вкладка «Админ»)
     - **PocketBase Admin** → `http://your-server:8090/_/` → Collections → scoreusers
   version: 1.0.0
   contact:
@@ -37,6 +36,8 @@ tags:
     description: Управление табло матча (счёт, сеты, команды, настройки)
   - name: Matches
     description: История и результаты матчей
+  - name: System
+    description: Служебные эндпоинты (проверка работоспособности)
 
 security:
   - BearerAuth: []
@@ -66,8 +67,8 @@ paths:
         Аутентификация пользователя по username/email и паролю.
         Возвращает Bearer-токен для использования в заголовке `Authorization` последующих запросов.
 
-        **Firebase:** email = `username@volleyball.local` (если передан только username)
         **PocketBase:** принимает username или email
+        (если передан только username, email формируется как `username@volleyball.local`).
       tags:
         - Auth
       operationId: login
@@ -152,6 +153,95 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /api/auth/update-password:
+    post:
+      summary: Смена пароля пользователя
+      description: |
+        **В настоящее время смена пароля через API недоступна.**
+        Эндпоинт принимает `uid` и `password`, но всегда возвращает `400 Bad Request`
+        с указанием использовать админ-панель мобильного интерфейса (вкладка «Админ»)
+        или PocketBase Admin Dashboard (`http://your-server:8090/_/`).
+      tags:
+        - Auth
+      operationId: updatePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - uid
+                - password
+              properties:
+                uid:
+                  type: string
+                  description: ID пользователя
+                password:
+                  type: string
+                  format: password
+                  description: Новый пароль (минимум 8 символов)
+      responses:
+        '400':
+          description: Смена пароля через API недоступна
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/log:
+    post:
+      summary: Записать событие аутентификации в лог
+      description: |
+        Сохраняет событие аутентификации в коллекцию `auth_log` PocketBase.
+        Если БД недоступна — событие записывается в файл `logs/auth_log.log`.
+        Используется мобильной версией как fallback при недоступности БД.
+        IP-адрес клиента определяется на сервере (в т.ч. из `x-forwarded-for`).
+      tags:
+        - Auth
+      operationId: logAuthEvent
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                  description: Тип события (например login, logout)
+                username:
+                  type: string
+                success:
+                  type: boolean
+                details:
+                  type: string
+      responses:
+        '200':
+          description: Событие записано
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  target:
+                    type: string
+                    enum: [db, file]
+                    description: Куда записано событие
+                  file:
+                    type: string
+                    description: Путь к файлу лога (если target=file)
 
   # ===================== SCOREBOARD =====================
 
@@ -701,7 +791,7 @@ components:
           example: ok
         provider:
           type: string
-          enum: [firebase, pocketbase]
+          enum: [pocketbase]
           example: pocketbase
         timestamp:
           type: string
@@ -737,15 +827,15 @@ components:
         token:
           type: string
           description: Bearer-токен для заголовка Authorization
-          example: eyJhbGciOiJSUzI1NiIsImtpZCI6Ii4uLiJ9...
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9...
         refreshToken:
           type: string
-          description: Refresh token (для обновления access token)
-          example: AOEToken...
+          description: Совпадает с token (PocketBase использует один токен)
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ii4uLiJ9...
         expiresIn:
           type: integer
-          description: Время жизни токена в секундах
-          example: 3600
+          description: Время жизни токена в секундах (7 дней — стандарт PocketBase)
+          example: 604800
         user:
           type: object
           properties:
