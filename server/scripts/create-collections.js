@@ -4,16 +4,18 @@
  * Использование:
  *   node server/scripts/create-collections.js
  * 
- * Или с переменными окружения:
- *   POCKETBASE_URL=http://your-server:8090 \
+ * Или с переменными окружения (изнутри контейнера сервера обычно уже заданы):
+ *   POCKETBASE_URL=http://pocketbase:8090 \
  *   POCKETBASE_ADMIN_EMAIL=admin@example.com \
  *   POCKETBASE_ADMIN_PASSWORD=yourpassword \
  *   node server/scripts/create-collections.js
  */
 
-// Конфигурация из переменных окружения или значения по умолчанию
+// Конфигурация из переменных окружения или значения по умолчанию.
+// localhost:8090 — порт контейнера PB, опубликованный только на 127.0.0.1
+// (см. docker-compose.pb.yml); в docker-сети используйте http://pocketbase:8090.
 const CONFIG = {
-  url: process.env.POCKETBASE_URL || 'http://zago.my.to:8091',
+  url: process.env.POCKETBASE_URL || 'http://localhost:8090',
   adminEmail: process.env.POCKETBASE_ADMIN_EMAIL || 'supervisor@volleyball.local',
   adminPassword: process.env.POCKETBASE_ADMIN_PASSWORD || 'Mer1in00'
 };

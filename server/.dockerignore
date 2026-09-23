@@ -1,6 +1,0 @@
-# Игнорируемые файлы для Docker
-node_modules
-npm-debug.log
-.env
-*.log
-.DS_Store

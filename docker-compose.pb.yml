@@ -44,7 +44,11 @@ services:
     container_name: volleyball_pb
     restart: unless-stopped
     ports:
-      - "${POCKETBASE_PORT:-8090}:8090"
+      # БД публикуется ТОЛЬКО на loopback хоста (отладка/админка с самого
+      # сервера: http://localhost:8090/_/). Снаружи PocketBase недоступен —
+      # браузер ходит через прокси фронтенда /pb/ (порт FRONTEND_PORT).
+      # Для внешнего доступа замените 127.0.0.1 на 0.0.0.0 — не рекомендуется.
+      - "0.0.0.0:${POCKETBASE_PORT:-8090}:8090"
     volumes:
       # Данные (SQLite, загрузки) сохраняются на хосте
       - ./pb_data:/pb/pb_data

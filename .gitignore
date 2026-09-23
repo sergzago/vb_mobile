@@ -11,3 +11,9 @@ pb_data/
 
 # Секреты окружения
 .env
+deploy/vb_mobile-pocketbase.tar.gz
+deploy/vb_mobile-server.tar.gz
+deploy/vb_mobile-api.tar.gz
+deploy/vb_mobile-api.tar
+deploy/vb_mobile-api.tar.gz
+deploy/vb_mobile-api.tar

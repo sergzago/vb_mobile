@@ -85,7 +85,7 @@ async function initializeDb() {
     return dbInstance;
   }
 
-  // Приоритет: .env → credentials.js → localhost:8090
+  // Приоритет: .env → credentials.js (только абсолютный URL) → адрес в docker-сети
   let url = process.env.POCKETBASE_URL;
   let adminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
   let adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
@@ -93,14 +93,16 @@ async function initializeDb() {
   if (!url) {
     try {
       const creds = require('../../../credentials.js');
-      if (creds.pocketbase && creds.pocketbase.url) {
+      // '/pb/' и прочие относительные пути — конфиг браузера, серверу не годятся
+      if (creds.pocketbase && creds.pocketbase.url && !creds.pocketbase.url.startsWith('/')) {
         url = creds.pocketbase.url;
         console.log('ℹ️ PocketBase URL loaded from credentials.js');
       }
     } catch {}
   }
 
-  url = url || 'http://localhost:8090';
+  // Внутреннее подключение к БД: имя сервиса в docker-сети compose
+  url = url || 'http://pocketbase:8090';
   adminEmail = adminEmail || 'admin@example.com';
   adminPassword = adminPassword || '';
 

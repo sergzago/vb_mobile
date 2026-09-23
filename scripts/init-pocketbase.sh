@@ -17,7 +17,9 @@
 #   --api-container NAME   контейнер API-сервера    (по умолчанию volleyball_server)
 #   --collections FILE     файл структуры БД        (по умолчанию
 #                          ./pb_schema.json, fallback —
-#                          ./pocketbase_collections_export.json)
+#                          ./pocketbase_collections_export.json;
+#                          если на хосте нет ни того ни другого — берётся
+#                          запечённая в образ API копия /usr/src/pb_schema.json)
 #   --no-restart           не перезапускать контейнер API
 #   --no-app-user          не создавать сервисного пользователя app_users
 #   --reset-app-user-password  перезаписать пароль сервисного пользователя
@@ -28,6 +30,11 @@
 #
 # Переменные окружения (иначе берутся из корневого .env):
 #   POCKETBASE_ADMIN_EMAIL, POCKETBASE_ADMIN_PASSWORD
+#   POCKETBASE_PORT   — хостовой порт PB (для итоговой ссылки; внутри — 8090)
+#   API_PORT          — хостовой порт API (для итоговой ссылки; внутри — 3000)
+#   FRONTEND_PORT     — хостовой порт фронтенда (админка PB через /pb/_/)
+#   POCKETBASE_INTERNAL_URL — адрес PB внутри Docker-сети
+#                          (по умолчанию http://pocketbase:8090)
 #   INIT_ADMIN_USERNAME / INIT_ADMIN_EMAIL / INIT_ADMIN_PASSWORD
 #     — дополнительно создать администратора в scoreusers
 # ============================================================================
@@ -37,12 +44,16 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PB_CONTAINER="${PB_CONTAINER:-volleyball_pb}"
 API_CONTAINER="${API_CONTAINER:-volleyball_server}"
 COLLECTIONS_FILE=""
-INIT_JS="$ROOT_DIR/server/scripts/init-db.js"
+INIT_JS_HOST="$ROOT_DIR/server/scripts/init-db.js"
+INIT_JS="$INIT_JS_HOST"
 RESTART=1
 INIT_ARGS=()
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Печатает весь шапочный комментарий (до строки set -euo...), не зависимо
+  # от того, насколько он вырастет
+  sed -n '2,/^set -euo pipefail/ {/^set -euo pipefail/!p}' "${BASH_SOURCE[0]}" \
+    | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -66,8 +77,11 @@ if [[ -z "$COLLECTIONS_FILE" ]]; then
     COLLECTIONS_FILE="$PB_COLLECTIONS_FILE"
   elif [[ -f "$ROOT_DIR/pb_schema.json" ]]; then
     COLLECTIONS_FILE="$ROOT_DIR/pb_schema.json"
-  else
+  elif [[ -f "$ROOT_DIR/pocketbase_collections_export.json" ]]; then
     COLLECTIONS_FILE="$ROOT_DIR/pocketbase_collections_export.json"
+  else
+    # На хосте файлов нет — используем запечённую в образ API копию
+    COLLECTIONS_FILE=""
   fi
 fi
 
@@ -82,16 +96,27 @@ PB_ADMIN_EMAIL="${POCKETBASE_ADMIN_EMAIL:-$(env_file_value POCKETBASE_ADMIN_EMAI
 PB_ADMIN_EMAIL="${PB_ADMIN_EMAIL:-admin@volleyball.local}"
 PB_ADMIN_PASSWORD="${POCKETBASE_ADMIN_PASSWORD:-$(env_file_value POCKETBASE_ADMIN_PASSWORD)}"
 PB_ADMIN_PASSWORD="${PB_ADMIN_PASSWORD:-Mer1in}"
-PB_INTERNAL_URL="${POCKETBASE_INTERNAL_URL:-http://pocketbase:8090}"
+# Внутренний адрес PocketBase — только контейнерная сеть: PB слушает 8090
+# внутри контейнера всегда (dockerfile.pb), POCKETBASE_PORT из .env — хостовой.
+# Переопределяется POCKETBASE_INTERNAL_URL в окружении или в .env.
+PB_INTERNAL_URL="${POCKETBASE_INTERNAL_URL:-$(env_file_value POCKETBASE_INTERNAL_URL)}"
+PB_INTERNAL_URL="${PB_INTERNAL_URL:-http://pocketbase:8090}"
 PB_PUBLIC_PORT="${POCKETBASE_PORT:-$(env_file_value POCKETBASE_PORT)}"
 PB_PUBLIC_PORT="${PB_PUBLIC_PORT:-8090}"
+# Хостовой порт API (для итоговых ссылок); внутри контейнера всегда 3000
+API_PUBLIC_PORT="${API_PORT:-$(env_file_value API_PORT)}"
+API_PUBLIC_PORT="${API_PUBLIC_PORT:-3000}"
+# Хостовой порт фронтенда — прокси /pb/ (админка PB для браузера/сети)
+FE_PUBLIC_PORT="${FRONTEND_PORT:-$(env_file_value FRONTEND_PORT)}"
+FE_PUBLIC_PORT="${FE_PUBLIC_PORT:-8080}"
 
 step() { printf '\n== %s\n' "$*"; }
 
 # ---------------------------------------------------------------- проверки ---
+# Файлы на хосте НЕ обязательны: init-db.js и pb_schema.json запечены
+# в образ API (server/Dockerfile). Файл с хоста имеет приоритет — так удобно
+# обновлять схему/скрипт при локальной разработке.
 command -v docker >/dev/null 2>&1 || { echo "✗ docker не найден в PATH" >&2; exit 1; }
-[[ -f "$INIT_JS" ]] || { echo "✗ не найден $INIT_JS" >&2; exit 1; }
-[[ -f "$COLLECTIONS_FILE" ]] || { echo "✗ не найден файл структуры БД: $COLLECTIONS_FILE" >&2; exit 1; }
 
 for container in "$PB_CONTAINER" "$API_CONTAINER"; do
   if [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo false)" != "true" ]]; then
@@ -101,6 +126,23 @@ for container in "$PB_CONTAINER" "$API_CONTAINER"; do
   fi
 done
 
+if [[ ! -f "$INIT_JS" ]]; then
+  if docker exec "$API_CONTAINER" sh -c 'test -f /usr/src/app/scripts/init-db.js' 2>/dev/null; then
+    echo "• $INIT_JS_HOST не найден на хосте — используем скрипт из образа API"
+    INIT_JS=""
+  else
+    echo "✗ не найден $INIT_JS_HOST, и он не запечён в образ API" >&2
+    exit 1
+  fi
+fi
+
+if [[ -n "$COLLECTIONS_FILE" ]]; then
+  [[ -f "$COLLECTIONS_FILE" ]] || { echo "✗ не найден файл структуры БД: $COLLECTIONS_FILE" >&2; exit 1; }
+elif ! docker exec "$API_CONTAINER" sh -c 'test -f /usr/src/pb_schema.json' 2>/dev/null; then
+  echo "✗ pb_schema.json не найден ни на хосте, ни в образе API" >&2
+  exit 1
+fi
+
 # ------------------------------------------------------------- 1. суперюзер ---
 step "1/4 Суперпользователь PocketBase ($PB_ADMIN_EMAIL)"
 docker exec "$PB_CONTAINER" /pb/pocketbase superuser upsert "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" \
@@ -108,21 +150,40 @@ docker exec "$PB_CONTAINER" /pb/pocketbase superuser upsert "$PB_ADMIN_EMAIL" "$
 
 # -------------------------------------------------- 2. структура БД и юзеры ---
 step "2/4 Структура БД и сервисный пользователь"
-docker cp "$COLLECTIONS_FILE" "$API_CONTAINER:/tmp/pb_collections_export.json" >/dev/null
 
-docker exec -i \
-  -e POCKETBASE_URL="$PB_INTERNAL_URL" \
-  -e POCKETBASE_ADMIN_EMAIL="$PB_ADMIN_EMAIL" \
-  -e POCKETBASE_ADMIN_PASSWORD="$PB_ADMIN_PASSWORD" \
-  -e PB_COLLECTIONS_FILE=/tmp/pb_collections_export.json \
-  -e APP_USER_EMAIL="${APP_USER_EMAIL:-}" \
-  -e APP_USER_PASSWORD="${APP_USER_PASSWORD:-}" \
-  -e INIT_ADMIN_USERNAME="${INIT_ADMIN_USERNAME:-}" \
-  -e INIT_ADMIN_EMAIL="${INIT_ADMIN_EMAIL:-}" \
-  -e INIT_ADMIN_PASSWORD="${INIT_ADMIN_PASSWORD:-}" \
-  -e INIT_RESET_APP_USER_PASSWORD="${INIT_RESET_APP_USER_PASSWORD:-}" \
-  -e ENABLE_AUTH="${ENABLE_AUTH:-$(env_file_value ENABLE_AUTH)}" \
-  "$API_CONTAINER" node - "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}" < "$INIT_JS"
+# Схема: файл с хоста копируется в контейнер; если на хосте его нет —
+# используется запечённая в образ копия (/usr/src/pb_schema.json).
+if [[ -n "$COLLECTIONS_FILE" ]]; then
+  docker cp "$COLLECTIONS_FILE" "$API_CONTAINER:/tmp/pb_collections_export.json" >/dev/null
+  PB_SCHEMA_FILE=/tmp/pb_collections_export.json
+else
+  PB_SCHEMA_FILE=/usr/src/pb_schema.json
+  echo "• pb_schema.json не найден на хосте — используем схему из образа API"
+fi
+
+INIT_ENV=(
+  -e POCKETBASE_URL="$PB_INTERNAL_URL"
+  -e POCKETBASE_ADMIN_EMAIL="$PB_ADMIN_EMAIL"
+  -e POCKETBASE_ADMIN_PASSWORD="$PB_ADMIN_PASSWORD"
+  -e PB_COLLECTIONS_FILE="$PB_SCHEMA_FILE"
+  -e APP_USER_EMAIL="${APP_USER_EMAIL:-}"
+  -e APP_USER_PASSWORD="${APP_USER_PASSWORD:-}"
+  -e INIT_ADMIN_USERNAME="${INIT_ADMIN_USERNAME:-}"
+  -e INIT_ADMIN_EMAIL="${INIT_ADMIN_EMAIL:-}"
+  -e INIT_ADMIN_PASSWORD="${INIT_ADMIN_PASSWORD:-}"
+  -e INIT_RESET_APP_USER_PASSWORD="${INIT_RESET_APP_USER_PASSWORD:-}"
+  -e ENABLE_AUTH="${ENABLE_AUTH:-$(env_file_value ENABLE_AUTH)}"
+)
+
+# Скрипт: файл с хоста (через stdin) либо запечённый в образ
+# /usr/src/app/scripts/init-db.js
+if [[ -n "$INIT_JS" ]]; then
+  docker exec -i "${INIT_ENV[@]}" \
+    "$API_CONTAINER" node - "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}" < "$INIT_JS"
+else
+  docker exec -i "${INIT_ENV[@]}" \
+    "$API_CONTAINER" node /usr/src/app/scripts/init-db.js "${INIT_ARGS[@]+"${INIT_ARGS[@]}"}"
+fi
 
 # ------------------------------------------------------- 3. перезапуск API ---
 if [[ "$RESTART" -eq 1 ]]; then
@@ -138,12 +199,17 @@ fi
 # ------------------------------------------------------------ 4. проверка ---
 step "4/4 Проверка /health"
 printf '   PocketBase: '
+# 8090 — фиксированный внутренний порт контейнера PB (не путать с POCKETBASE_PORT)
 docker exec "$PB_CONTAINER" wget -q -O - http://127.0.0.1:8090/api/health 2>/dev/null || printf 'нет ответа'
 printf '\n   API:        '
-docker exec "$API_CONTAINER" wget -q -O - http://127.0.0.1:3000/health 2>/dev/null || printf 'нет ответа'
+# Порт берётся из окружения самого контейнера (задаёт compose: PORT=3000)
+docker exec "$API_CONTAINER" sh -c 'wget -q -O - "http://127.0.0.1:${PORT:-3000}/health"' 2>/dev/null || printf 'нет ответа'
 printf '\n'
 
 echo
 echo "== Готово =="
 echo "   Админка PocketBase: http://localhost:$PB_PUBLIC_PORT/_/  ($PB_ADMIN_EMAIL)"
+echo "     (порт PB слушает только 127.0.0.1 на сервере;"
+echo "      из браузера/сети — http://localhost:$FE_PUBLIC_PORT/pb/_/)"
+echo "   API (хост):         http://localhost:$API_PUBLIC_PORT/health"
 echo "   Статус API должен быть \"ok\", а не \"degraded\"."

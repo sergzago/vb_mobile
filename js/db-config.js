@@ -82,8 +82,10 @@ const DB_CONFIG = {
   pocketbase: _CREDENTIALS.pocketbase || {},
 
   // URL PocketBase (используется только если provider=pocketbase)
-  // Переопределяется переменной окружения POCKETBASE_URL
-  pocketbaseUrl: _env('POCKETBASE_URL') || (_CREDENTIALS.pocketbase && _CREDENTIALS.pocketbase.url) || 'http://localhost:8090',
+  // Переопределяется переменной окружения POCKETBASE_URL; для браузера
+  // берётся '/pb/' из credentials.js (прокси nginx), фоллбэк — docker-сеть.
+  // Порт в фоллбэке подставляется на этапе сборки образа из POCKETBASE_PORT.
+  pocketbaseUrl: _env('POCKETBASE_URL') || (_CREDENTIALS.pocketbase && _CREDENTIALS.pocketbase.url) || 'http://pocketbase:__POCKETBASE_PORT__',
 
   // ============================================================================
   // НАЗВАНИЯ КОЛЛЕКЦИЙ POCKETBASE

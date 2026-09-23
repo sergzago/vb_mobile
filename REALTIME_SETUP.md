@@ -19,7 +19,7 @@ SSE не работает через прокси «по умолчанию» �
 
 ```nginx
 location /pb/ {
-    proxy_pass http://127.0.0.1:8090/;
+    proxy_pass http://pocketbase:8090/;    # в docker-сети; вне docker — 127.0.0.1:8090
     proxy_http_version 1.1;
     proxy_set_header Connection '';        # keep-alive для SSE
     proxy_set_header Host $host;

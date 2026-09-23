@@ -40,10 +40,11 @@ async function getPbReaderClient() {
   if (!pbUrl) {
     try {
       const creds = require('../../../credentials.js');
-      if (creds.pocketbase && creds.pocketbase.url) pbUrl = creds.pocketbase.url;
+      // '/pb/' — конфиг браузера, серверу нужен абсолютный URL
+      if (creds.pocketbase && creds.pocketbase.url && !creds.pocketbase.url.startsWith('/')) pbUrl = creds.pocketbase.url;
     } catch {}
   }
-  pbUrl = pbUrl || 'http://localhost:8090';
+  pbUrl = pbUrl || 'http://pocketbase:8090';
 
   let userEmail, userPassword;
   try {
@@ -107,10 +108,11 @@ router.post('/login', async (req, res) => {
       if (!pbUrl) {
         try {
           const creds = require('../../../credentials.js');
-          if (creds.pocketbase && creds.pocketbase.url) pbUrl = creds.pocketbase.url;
+          // '/pb/' — конфиг браузера, серверу нужен абсолютный URL
+          if (creds.pocketbase && creds.pocketbase.url && !creds.pocketbase.url.startsWith('/')) pbUrl = creds.pocketbase.url;
         } catch {}
       }
-      pbUrl = pbUrl || 'http://localhost:8090';
+      pbUrl = pbUrl || 'http://pocketbase:8090';
       const userClient = new PocketBase(pbUrl);
       let authData;
 
