@@ -209,7 +209,7 @@ printf '\n'
 echo
 echo "== Готово =="
 echo "   Админка PocketBase: http://localhost:$PB_PUBLIC_PORT/_/  ($PB_ADMIN_EMAIL)"
-echo "     (порт PB слушает только 127.0.0.1 на сервере;"
-echo "      из браузера/сети — http://localhost:$FE_PUBLIC_PORT/pb/_/)"
+echo "     (порт PB опубликован на 0.0.0.0 — доступен и из сети;"
+echo "      через браузер также: http://localhost:$FE_PUBLIC_PORT/pb/_/)"
 echo "   API (хост):         http://localhost:$API_PUBLIC_PORT/health"
 echo "   Статус API должен быть \"ok\", а не \"degraded\"."

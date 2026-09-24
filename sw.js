@@ -1,4 +1,4 @@
-const CACHE_NAME = 'volleyball-scoreboard-v10';
+const CACHE_NAME = 'volleyball-scoreboard-v11';
 const ASSETS = [
   '/mobile.html',
   '/css/mobile.css',

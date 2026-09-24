@@ -229,21 +229,27 @@
 
   function initAuth() {
     if (typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0) {
-      showApp();
-      document.getElementById('mobileUserInfo').textContent = 'Гость';
-      // Гостевой режим: игра и шаблоны доступны без входа
-      applyGuestPermissions();
+      // Гостевой режим: игра и шаблоны доступны без входа.
       // БД нужна и без авторизации: правила PocketBase для коллекций
       // volleyball/matches/templates допускают публичный доступ.
-      // Список шаблонов перечитываем после init — showApp() вызывается раньше,
-      // когда SDK ещё не загружен (и его вызов не срабатывает).
+      // ВАЖНО: сначала DB.init() (загрузка SDK), и только потом showApp()
+      // и загрузки списков — иначе DB.templates.list()/queryAll() вызываются
+      // до готовности SDK (ошибка "PocketBase SDK не загружен").
       DB.init().then(function() {
+        showApp();
+        document.getElementById('mobileUserInfo').textContent = 'Гость';
+        applyGuestPermissions();
         loadGamesList();
         if (typeof loadMobileTemplateSelect === 'function') {
           loadMobileTemplateSelect();
         }
       }).catch(function(err) {
+        // SDK/инициализация не удалась (напр. нет сети до CDN) — показываем
+        // приложение, чтобы был виден хотя бы интерфейс с ошибкой загрузки.
         console.error('[Mobile] Guest DB init failed:', err);
+        showApp();
+        document.getElementById('mobileUserInfo').textContent = 'Гость';
+        applyGuestPermissions();
       });
       return;
     }
@@ -603,6 +609,15 @@
 
   function loadGamesList() {
     var container = document.getElementById('gamesListContainer');
+    // Вызов до завершения DB.init() (гостевой режим вызывал showApp/loadGamesList
+    // раньше init): DB.scoreboard.queryAll() вернёт отклонённый промис —
+    // пропускаем ранний вызов, корректная загрузка придёт из DB.init().then().
+    if (!DB || typeof DB.isInitialized !== 'function' || !DB.isInitialized()) {
+      if (container) {
+        container.innerHTML = '<div class="loading"><div class="spinner"></div> Загрузка...</div>';
+      }
+      return;
+    }
     container.innerHTML = '<div class="loading"><div class="spinner"></div> Загрузка...</div>';
     _gamesListData = {};
 
@@ -2163,9 +2178,19 @@
 
   // ===== TEMPLATE SELECT =====
 
-  // Загружаем список шаблонов и заполняем select
+  // Загружаем список шаблонов и заполняем select.
+  // Вызов до завершения DB.init() — штатная ситуация в гостевом режиме
+  // (showApp() зовёт раньше init): DB.templates.list() вернёт отклонённый
+  // промис "БД ещё не инициализирована", повторная загрузка произойдёт
+  // из DB.init().then() — здесь просто пропускаем лишний вызов.
   function loadMobileTemplateSelect() {
-    if (!DB || !DB.templates || typeof DB.templates.list !== 'function') {
+    // Ранний вызов до завершения DB.init() (гостевой режим вызывал
+    // showApp() до init): список корректно загрузится из DB.init().then() —
+    // здесь молча пропускаем, чтобы не засорять консоль Sync error.
+    if (!DB || typeof DB.isInitialized !== 'function' || !DB.isInitialized()) {
+      return;
+    }
+    if (!DB.templates || typeof DB.templates.list !== 'function') {
       console.warn('[Mobile] DB.templates not available, skipping template list load');
       return;
     }

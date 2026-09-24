@@ -64,6 +64,18 @@ docker compose build
 docker compose build server
 ```
 
+> 💡 Если первый проход упал на загрузке базовых образов
+> (`failed to resolve source metadata ... alpine/node/nginx`, `dial tcp ...`) —
+> registry docker.io был временно недоступен. Повторите сборку или
+> воспользуйтесь скриптом с автоматическими повторами (только сетевые
+> ошибки ретраятся, ошибки Dockerfile — нет):
+>
+> ```bash
+> ./scripts/build.sh              # все сервисы, до 3 попыток с backoff
+> ./scripts/build.sh server       # только API
+> BUILD_ATTEMPTS=5 ./scripts/build.sh
+> ```
+
 > ⚠️ Собирать нужно **из корня репозитория**: у сервисов `server` и `frontend`
 > `context: .` — образы запекают `js/`, `credentials.js`, `pb_schema.json` и
 > статику. Отдельный `cd server && docker build .` больше не работает.
@@ -73,30 +85,29 @@ docker compose build server
 - `vb_mobile-server:latest` — ~200-300 МБ (node:18-alpine + зависимости)
 - `vb_mobile-frontend:latest` — nginx:alpine + статика
 
-### 1.1. Порт PocketBase подставляется при сборке
+### 1.1. Порт PocketBase внутри сети всегда 8090
 
-Порт PocketBase из `.env` (`POCKETBASE_PORT`, по умолчанию `8090`) попадает
-внутрь образов **на этапе сборки** — менять его после сборки без пересборки нельзя.
+Внутри docker-сети контейнер PocketBase слушает **всегда `8090`**
 
-Как это работает:
+(`dockerfile.pb`: `--http=0.0.0.0:8090`). `POCKETBASE_PORT` из `.env`
 
-1. в исходнике `js/db-config.js` фоллбэк записан заглушкой:
-   `'http://pocketbase:__POCKETBASE_PORT__'`;
-2. `docker-compose.yml` передаёт значение из `.env` в сборку обоих образов:
-   `build.args.POCKETBASE_PORT: ${POCKETBASE_PORT:-8090}`;
-3. `server/Dockerfile` и `Dockerfile.frontend` объявляют `ARG POCKETBASE_PORT`
-   и выполняют `RUN sed -i "s/__POCKETBASE_PORT__/${POCKETBASE_PORT}/" ...`
-   над запечённым `js/db-config.js`.
+— это **только хостовая публикация** `0.0.0.0:${POCKETBASE_PORT}:8090`
+(внешний доступ задуман): внутри сети на этом порту ничего не слушает,
+поэтому подставлять его в адреса `pocketbase:<порт>` **нельзя**
+(будет `connection refused`).
 
-Так адрес в фоллбэке всегда совпадает с реальным портом контейнера PocketBase:
-контейнер PB всегда слушает внутри сети `8090`, а `POCKETBASE_PORT` — это порт
-публикации на хосте (`127.0.0.1:${POCKETBASE_PORT}:8090`, только loopback).
+Отсюда правила:
+
+- `POCKETBASE_URL` в `.env` — адрес **внутри сети**, всегда
+  `http://pocketbase:8090` (меняется только для внешней/хостовой БД вне стека);
+- фоллбэк в `js/db-config.js` — тоже всегда `http://pocketbase:8090`
+  (внутрь образов хостовой порт НЕ запекается, поэтому при смене
+  `POCKETBASE_PORT` пересборка не нужна — достаточно `docker compose up -d`);
+- основной путь браузера — same-origin `/pb/` (`credentials.js` →
+  `pocketbase.url`), который nginx фронтенда проксирует в `pocketbase:8090`.
 
 ```bash
-# Порт изменить ДО сборки — иначе образы останутся на 8090
-POCKETBASE_PORT=9090 docker compose build        # затем: docker compose up -d
-
-# Проверить, что значение запечено
+# Проверить текущее значение внутри собранных образов (должен быть 8090)
 docker run --rm --entrypoint grep vb_mobile-server:latest \
   'pocketbase:' /usr/src/js/db-config.js
 ```
@@ -168,6 +179,11 @@ ls -lh deploy/vb_mobile-server.tar.gz
 ```
 
 Если используется docker compose, можно сохранить конкретный образ по ID:
+
+docker save vb_mobile-pocketbase:0.36.6 vb_mobile-server:latest vb_mobile-frontend | gzip > deploy/vb_mobile-images.tar.gz
+scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz  zago@10.74.8.75:/tmp/
+scp -o "ProxyJump zago@zago.404.mn:11022" docker-compose.yml docker-compose.pb.yml .env pb_schema.json scripts/init-pocketbase.sh  zago@10.74.8.75:/tmp/
+
 
 ```bash
 # Узнать ID образа
@@ -607,14 +623,15 @@ frontend). Явный флаг `-f docker-compose.yml` перекрывает `C
 
 Порты и переменные PocketBase-контейнера (`POCKETBASE_ENV`, `PB_VERSION`,
 `POCKETBASE_MEMORY_LIMIT`) используются только файлом `docker-compose.pb.yml`.
-Дополнительно `POCKETBASE_PORT` участвует в **сборке** образов `server` и
-`frontend`: он передаётся как `build.args` и подставляется в запечённый
-`js/db-config.js` (см. «Локальная сборка → 1.1»). Поэтому при смене
-`POCKETBASE_PORT` образы нужно пересобрать.
+`POCKETBASE_PORT` — **только хостовая публикация** `0.0.0.0:${POCKETBASE_PORT}:8090`
+(внутрь образов он НЕ запекается: фоллбэк в `js/db-config.js` — всегда
+`http://pocketbase:8090`, см. «Локальная сборка → 1.1»). Поэтому при смене
+`POCKETBASE_PORT` пересборка образов **не нужна** — достаточно
+`docker compose up -d`.
 
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
-| POCKETBASE_PORT | 8090 | Порт публикации PocketBase на хосте; **также build-arg** для `server`/`frontend` |
+| POCKETBASE_PORT | 8090 | Только хостовая публикация PocketBase (`0.0.0.0:порт→8090`); внутрь образов не запекается |
 | API_PORT | 3000 | Порт API сервера (только хостовой; внутри контейнера фиксирован 3000) |
 | FRONTEND_PORT | 8080 | Порт фронтенда |
 | POCKETBASE_ENV | production | Режим PocketBase |

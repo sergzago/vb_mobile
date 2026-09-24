@@ -70,8 +70,9 @@ async function startServer() {
   const enableSwagger = process.env.ENABLE_SWAGGER === 'true' || process.env.NODE_ENV !== 'production';
   if (enableSwagger) {
     const swaggerUi = require('swagger-ui-express');
-    const YAML = require('yamljs');
-    const swaggerDocument = YAML.load('./swagger.yaml');
+    const yaml = require('js-yaml');
+    const fs = require('fs');
+    const swaggerDocument = yaml.load(fs.readFileSync('./swagger.yaml', 'utf8'));
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
     console.log(`📖 Swagger UI: http://localhost:${PORT}/api-docs`);
   }

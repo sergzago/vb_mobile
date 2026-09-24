@@ -12,8 +12,8 @@
  */
 
 // Конфигурация из переменных окружения или значения по умолчанию.
-// localhost:8090 — порт контейнера PB, опубликованный только на 127.0.0.1
-// (см. docker-compose.pb.yml); в docker-сети используйте http://pocketbase:8090.
+// localhost:8090 — хостовой порт контейнера PB, опубликованный на 0.0.0.0
+// (внешний доступ задуман, см. docker-compose.pb.yml); в docker-сети — http://pocketbase:8090.
 const CONFIG = {
   url: process.env.POCKETBASE_URL || 'http://localhost:8090',
   adminEmail: process.env.POCKETBASE_ADMIN_EMAIL || 'supervisor@volleyball.local',

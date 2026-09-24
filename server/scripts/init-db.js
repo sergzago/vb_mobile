@@ -644,7 +644,7 @@ async function main() {
   console.log('');
   console.log('Дальше — перезапустите контейнер API, чтобы он подключился к БД:');
   console.log('  docker restart volleyball_server   # или просто ./scripts/init-pocketbase.sh');
-  console.log('Админка PocketBase: http://localhost:8090/_/ (порт слушает только 127.0.0.1)');
+  console.log('Админка PocketBase: http://localhost:8090/_/ (порт опубликован на 0.0.0.0 — доступен и из сети)');
   console.log('  из сети/браузера — через прокси фронтенда: http://localhost:8080/pb/_/');
 }
 
