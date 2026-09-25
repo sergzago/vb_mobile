@@ -15,11 +15,15 @@ Realtime-обновления (мгновенная синхронизация �
 ## 2. Реверс-прокси (nginx)
 
 SSE не работает через прокси «по умолчанию» — nginx буферизует ответ.
-Для локации, которая проксирует PocketBase (в проекте субпуть `/pb/`), нужно:
+Для локации, которая проксирует PocketBase (в проекте — субпуть
+`<APP_PREFIX>pb/`, по умолчанию `/vb/pb/`; см. `nginx.conf.template`), нужно:
 
 ```nginx
-location /pb/ {
-    proxy_pass http://pocketbase:8090/;    # в docker-сети; вне docker — 127.0.0.1:8090
+location ${APP_PREFIX}pb/ {
+    resolver 127.0.0.11 valid=30s ipv6=off;
+    set $pb_upstream http://pocketbase:8090;   # в docker-сети; вне docker — 127.0.0.1:8090
+    rewrite ^${APP_PREFIX}pb/(.*)$ /$1 break;
+    proxy_pass $pb_upstream;
     proxy_http_version 1.1;
     proxy_set_header Connection '';        # keep-alive для SSE
     proxy_set_header Host $host;

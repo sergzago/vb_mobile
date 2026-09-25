@@ -46,6 +46,23 @@ async function startServer() {
   }));
   app.use(express.json());
   
+  // Health check endpoint
+  // Регистрируется ДО блока /api-маршрутов, чтобы /api/health отвечал и в
+  // degraded-режиме (там ниже идёт app.use('/api', 503-fallback)).
+  // /api/health — алиас /health: внешний nginx проксирует /myvb/api/* → /api/*,
+  // поэтому через reverse proxy доступен только путь под /api/ (нужен для
+  // Swagger UI «Try it out»). /health сохранён — на него ссылается
+  // docker healthcheck.
+  const healthHandler = (req, res) => {
+    res.json({
+      status: dbConfig ? 'ok' : 'degraded',
+      provider: app.locals.dbProvider,
+      timestamp: new Date().toISOString(),
+    });
+  };
+  app.get('/health', healthHandler);
+  app.get('/api/health', healthHandler);
+
   // Маршруты (только если БД подключена)
   if (dbConfig) {
     app.use('/api/auth', authRouter);
@@ -76,15 +93,6 @@ async function startServer() {
     app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
     console.log(`📖 Swagger UI: http://localhost:${PORT}/api-docs`);
   }
-  
-  // Health check endpoint
-  app.get('/health', (req, res) => {
-    res.json({
-      status: dbConfig ? 'ok' : 'degraded',
-      provider: app.locals.dbProvider,
-      timestamp: new Date().toISOString(),
-    });
-  });
   
   // 404 handler
   app.use((req, res) => {

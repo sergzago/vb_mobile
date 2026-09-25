@@ -369,17 +369,24 @@
 
   // Логирование в файл через серверный API (используется, когда БД недоступна)
   function logAuthToFile(data) {
-    // URL сервера: приоритет CREDENTIALS.server.url, иначе текущий origin
+    // База для API-сервера: приоритет CREDENTIALS.server.prefix — unique
+    // same-origin путь (напр. '/vb/api/'), при необходимости с абсолютным
+    // CREDENTIALS.server.url перед ним. Фоллбэк — корневой '/api/' (обратная
+    // совместимость со старым credentials.js без prefix).
     var serverBase = '';
     try {
-      if (typeof CREDENTIALS !== 'undefined' && CREDENTIALS.server && CREDENTIALS.server.url) {
-        serverBase = CREDENTIALS.server.url;
+      if (typeof CREDENTIALS !== 'undefined' && CREDENTIALS.server) {
+        if (CREDENTIALS.server.prefix) {
+          serverBase = (CREDENTIALS.server.url || '') + CREDENTIALS.server.prefix;
+        } else if (CREDENTIALS.server.url) {
+          serverBase = CREDENTIALS.server.url + '/api/';
+        }
       }
     } catch (e) {}
     if (!serverBase) {
-      serverBase = window.location.origin;
+      serverBase = '/api/';
     }
-    var serverUrl = serverBase.replace(/\/+$/, '') + '/api/auth/log';
+    var serverUrl = serverBase.replace(/\/+$/, '') + '/auth/log';
     try {
       return fetch(serverUrl, {
         method: 'POST',

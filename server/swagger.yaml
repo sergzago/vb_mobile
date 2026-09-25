@@ -12,7 +12,7 @@ info:
     1. Получите токен через `POST /api/auth/login`
     2. Используйте его в заголовке `Authorization: Bearer <token>` для защищённых эндпоинтов
     Все эндпоинты `/api/scoreboard/*` и `/api/matches/*` требуют авторизации.
-    Только `/api/auth/login`, `/api/auth/log` и `/health` доступны без токена.
+    Только `/api/auth/login`, `/api/auth/log` и `/api/health` доступны без токена.
 
     ## Управление пользователями
     Создание, редактирование и удаление пользователей осуществляется **не через API**,
@@ -26,6 +26,8 @@ info:
     name: MIT
 
 servers:
+  - url: https://zago.my.to/myvb
+    description: Production server (via Nginx reverse proxy)
   - url: http://localhost:3000
     description: Local development server
 
@@ -43,9 +45,13 @@ security:
   - BearerAuth: []
 
 paths:
-  /health:
+  /api/health:
     get:
       summary: Проверка работоспособности сервера
+      description: >-
+        Через внешний reverse proxy доступен только этот путь: nginx
+        проксирует `/myvb/api/*` в `/api/*` бэкенда. Локальный алиас
+        `/health` сохранён — на него ссылается docker healthcheck.
       tags:
         - System
       operationId: healthCheck

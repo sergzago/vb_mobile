@@ -5,7 +5,7 @@ serviceAccountKey.json
 server/serviceAccountKey.json
 password.json
 credentials.local.js
-
+deploy/*
 # Данные PocketBase (SQLite + загрузки) — создаются контейнером
 pb_data/
 

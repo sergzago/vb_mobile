@@ -1,3 +1,19 @@
+# =============================================================================
+# Volleyball Scoreboard — nginx фронтенда (ШАБЛОН)
+# =============================================================================
+# Это шаблон, а не готовый конфиг. При старте контейнера nginx:alpine подставляет
+# в него переменную окружения APP_PREFIX (docker-entrypoint.d/20-envsubst-on-templates.sh)
+# и кладёт результат в /etc/nginx/conf.d/default.conf.
+# Подстановка ограничена фильтром NGINX_ENVSUBST_FILTER=APP_PREFIX (см.
+# Dockerfile.frontend), поэтому прочие $переменные nginx не затрагиваются.
+#
+# APP_PREFIX — УНИКАЛЬНЫЙ префикс same-origin путей (по умолчанию /vb/), чтобы
+# не конфликтовать с чужими /pb/ и /api/ на общем домене и с внешним
+# reverse-proxy, который может занимать эти пути:
+#     <APP_PREFIX>pb/  → контейнер pocketbase:8090
+#     <APP_PREFIX>api/ → контейнер server:3000
+# Значение должно совпадать с APP_PREFIX в credentials.js (браузер).
+# =============================================================================
 server {
     listen 80;
     server_name localhost;
@@ -7,17 +23,28 @@ server {
     # Файл по умолчанию
     index mobile.html;
 
-    # ----------------------------------------------------------------------------
-    # PocketBase (API + realtime SSE): проксирование /pb/ в контейнер pocketbase.
-    # Браузер (credentials.js → url '/pb/') ходит на тот же origin — без CORS.
+    # -------------------------------------------------------------------------
+    # Runtime-конфиг фронтенда: префикс same-origin путей.
+    # Подключается в HTML ДО credentials.js; credentials.js приоритетно берёт
+    # window.VB_APP_PREFIX — так префикс меняется через APP_PREFIX без
+    # пересборки статики.
+    # -------------------------------------------------------------------------
+    location = /vb-config.js {
+        default_type application/javascript;
+        add_header Cache-Control "no-store";
+        return 200 'window.VB_APP_PREFIX="${APP_PREFIX}";';
+    }
+
+    # -------------------------------------------------------------------------
+    # PocketBase (API + realtime SSE): проксирование <APP_PREFIX>pb/ в контейнер
+    # pocketbase. Браузер ходит на тот же origin — без CORS.
     # resolver 127.0.0.11 — docker-embedded DNS; через переменную $pb_upstream
-    # nginx стартует даже если контейнера pocketbase нет (внешняя/хостовая БД) —
-    # тогда /pb/* ответит 502, остальное продолжит работать.
-    # ----------------------------------------------------------------------------
-    location /pb/ {
+    # nginx стартует даже если контейнера pocketbase нет (тогда ответ 502).
+    # -------------------------------------------------------------------------
+    location ${APP_PREFIX}pb/ {
         resolver 127.0.0.11 valid=30s ipv6=off;
         set $pb_upstream http://pocketbase:8090;
-        rewrite ^/pb/(.*)$ /$1 break;
+        rewrite ^${APP_PREFIX}pb/(.*)$ /$1 break;
         proxy_pass $pb_upstream;
 
         proxy_http_version 1.1;
@@ -25,12 +52,31 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE realtime (/pb/api/realtime): без буферизации, долгий таймаут
+        # SSE realtime (<APP_PREFIX>pb/api/realtime): без буферизации, долгий таймаут
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_set_header Connection '';
+    }
+
+    # -------------------------------------------------------------------------
+    # Node.js API сервер: проксирование <APP_PREFIX>api/ в контейнер server.
+    # nginx (внутри docker-сети) обращается к сервису по имени server:3000;
+    # хостовой API_PORT сюда подставлять нельзя — внутри сети на нём ничего нет.
+    # rewrite возвращает пути сервера к виду /api/... (сервер их и ожидает).
+    # -------------------------------------------------------------------------
+    location ${APP_PREFIX}api/ {
+        resolver 127.0.0.11 valid=30s ipv6=off;
+        set $api_upstream http://server:3000;
+        rewrite ^${APP_PREFIX}api/(.*)$ /api/$1 break;
+        proxy_pass $api_upstream;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # Для корректной работы SPA (Single Page Application)
