@@ -1,4 +1,20 @@
 # Docker Deploy — Volleyball Scoreboard
+Кратко последовательность действий:
+1. Собираем образ
+docker compose build
+Если хотим установить на локальный компьютер, то
+docker compose up -d --build
+2. Сохраняем образы 
+docker save vb_mobile-pocketbase:0.36.6 vb_mobile-server:latest vb_mobile-frontend | gzip > deploy/vb_mobile-images.tar.gz
+3. Копируем образы на сервер
+scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz  zago@10.74.8.75:/tmp/
+# Если необходимо скопировать новые файлы для docker compose:
+# scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz docker-compose.yml docker-compose.pb.yml .env pb_schema.json scripts/init-pocketbase.sh  zago@10.74.8.75:/tmp/
+
+4. На сервере в каталоге с проектом (/opt/volleyball-mobile)
+docker compose down
+gunzip -c /tmp/vb_mobile-images.tar.gz | docker load 
+docker compose up -d
 
 Полная инструкция по сборке Docker-образа API-сервера, копированию на удалённый сервер и запуску через Docker Compose / Docker Swarm.
 

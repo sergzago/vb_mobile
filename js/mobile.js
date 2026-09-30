@@ -210,6 +210,16 @@
   // ===== AUTH =====
 
   /**
+   * Гостевой режим: авторизация отключена (ENABLE_AUTH=0 — работа без входа).
+   * Используется для выдачи прав, совпадающих с правами администратора,
+   * например удаления игр со вкладки «Игры».
+   * @returns {boolean}
+   */
+  function isGuestMode() {
+    return typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0;
+  }
+
+  /**
    * Права гостевого режима (ENABLE_AUTH=0 — работа без авторизации).
    * Без входа должны быть доступны создание/подключение игры и редактор
    * шаблонов. Вкладка «Админ» (управление пользователями) остаётся скрытой,
@@ -228,7 +238,7 @@
   }
 
   function initAuth() {
-    if (typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0) {
+    if (isGuestMode()) {
       // Гостевой режим: игра и шаблоны доступны без входа.
       // БД нужна и без авторизации: правила PocketBase для коллекций
       // volleyball/matches/templates допускают публичный доступ.
@@ -677,7 +687,10 @@
 
           pendingGameSelect = gid;
           document.getElementById('mobileGameSelectInfo').innerHTML = info;
-          document.getElementById('mobileGameSelectDelete').style.display = _userRole === 'admin' ? '' : 'none';
+          // Кнопка «Удалить»: администратор всегда, гость — в гостевом режиме
+          // (ENABLE_AUTH=0 удаление разрешено публичными правилами БД).
+          document.getElementById('mobileGameSelectDelete').style.display =
+            (_userRole === 'admin' || isGuestMode()) ? '' : 'none';
           document.getElementById('mobileGameSelectModal').classList.remove('hidden');
         });
       });
@@ -891,7 +904,7 @@
   // ===== TEAMS UI =====
 
   function updateTeamsUI(data) {
-    document.getElementById('mobileTournament').value = data['tournament_name'] || 'НВЛ';
+    document.getElementById('mobileTournament').value = data['tournament_name'] || '-';
     document.getElementById('mobileVenue').value = data['venue'] || '';
     document.getElementById('mobileHomeTeam').value = data['home_team'] || '';
     document.getElementById('mobileAwayTeam').value = data['away_team'] || '';
@@ -901,7 +914,7 @@
     document.getElementById('mobileAwayColorHex').value = data['away_color'] || '#00ff00';
 
     if (typeof data['tournament_name'] === 'undefined') {
-      update_db({ tournament_name: 'НВЛ' });
+      update_db({ tournament_name: '-' });
     }
     if (typeof data['venue'] === 'undefined') {
       update_db({ venue: '' });
@@ -1199,7 +1212,7 @@
       date_time: DB.serverTimestamp(),
       home_team: mobileScoreboardData['home_team'],
       away_team: mobileScoreboardData['away_team'],
-      tournament_name: mobileScoreboardData['tournament_name'] || 'НВЛ',
+      tournament_name: mobileScoreboardData['tournament_name'] || '-',
       venue: mobileScoreboardData['venue'] || '',
       overall_score: overallHome + ':' + overallAway,
       sets_score: setHistory || mobileScoreboardData['set_history'] || [],
@@ -1781,7 +1794,7 @@
         away_color: document.getElementById('mobileAwayColor').value,
         home_team: document.getElementById('mobileHomeTeam').value,
         home_color: document.getElementById('mobileHomeColor').value,
-        tournament_name: document.getElementById('mobileTournament').value || 'НВЛ',
+        tournament_name: document.getElementById('mobileTournament').value || '-',
         venue: document.getElementById('mobileVenue').value || ''
       };
       if (!_recordExists) update.show = 1;

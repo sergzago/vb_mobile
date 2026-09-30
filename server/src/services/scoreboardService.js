@@ -57,7 +57,7 @@ class ScoreboardService {
       away_team: data.away_team || 'Team2',
       home_color: data.home_color || '#ff0000',
       away_color: data.away_color || '#00ff00',
-      tournament_name: data.tournament_name || 'НВЛ',
+      tournament_name: data.tournament_name || '-',
       venue: data.venue || '',
       home_score: 0,
       away_score: 0,
@@ -347,7 +347,7 @@ class ScoreboardService {
       home_color: teamsData.home_color,
       away_team: teamsData.away_team,
       away_color: teamsData.away_color,
-      tournament_name: teamsData.tournament_name || 'НВЛ',
+      tournament_name: teamsData.tournament_name || '-',
     };
     if (teamsData.venue !== undefined) {
       update.venue = teamsData.venue;
@@ -428,7 +428,7 @@ class ScoreboardService {
       away_color: keepSettings ? data.away_color : '#00ff00',
       home_team: keepSettings ? data.home_team : 'Team1',
       home_color: keepSettings ? data.home_color : '#ff0000',
-      tournament_name: keepSettings ? data.tournament_name : 'НВЛ',
+      tournament_name: keepSettings ? data.tournament_name : '-',
       venue: keepSettings ? data.venue : '',
       home_sets: 0, away_sets: 0,
       home_timeouts: 0, away_timeouts: 0,
@@ -472,7 +472,7 @@ class ScoreboardService {
       date_time: this.db.serverTimestamp(),
       home_team: data.home_team,
       away_team: data.away_team,
-      tournament_name: data.tournament_name || 'НВЛ',
+      tournament_name: data.tournament_name || '-',
       overall_score: `${overallHome}:${overallAway}`,
       sets_score: overrideData?.setHistory || data.set_history || [],
       game_type: isBeach ? 'beach' : 'classic',
