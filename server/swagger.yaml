@@ -317,7 +317,10 @@ paths:
 
     patch:
       summary: Обновить произвольные поля табло
-      description: Позволяет обновить любые поля, кроме `lastEdited` (устанавливается автоматически)
+      description: |
+        Позволяет обновить любые поля, кроме `lastEdited` (устанавливается автоматически)
+        и `home_score`/`away_score` — очки принимаются только через `POST /score`,
+        иначе победа в сете не засчитывается. Запрос с этими полями отклоняется с `400`.
       tags:
         - Scoreboard
       operationId: updateScoreboard
@@ -340,6 +343,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Scoreboard'
+        '400':
+          description: Переданы запрещённые поля (home_score/away_score) или неверный запрос
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/scoreboard/{game_id}/score:
     post:
@@ -350,6 +359,14 @@ paths:
         - Автоматическую смену площадок (пляжный — каждые N суммарных очков, классический — 8 очков на тай-брейке)
         - Фиксацию истории сетов
         - Сохранение результата матча при завершении
+        - Откат: `-1` выигравшей команды при `pending_new_set=true` возвращает
+          счёт по сетам (домашние/гостевые `home_fouls`/`away_fouls` в классическом
+          режиме, `home_sets`/`away_sets` в пляжном), историю сетов и флаги
+          ожидания нового сета к состоянию до выигрыша партии
+        - Повторный `+1` при `pending_new_set=true` не засчитывает партию второй раз
+        - При `pending_new_set=true` (партия засчитана, ожидается новый сет)
+          инкремент игнорируется: кнопки счёта во фронтенде в этот момент
+          заблокированы, а API остаётся устойчивым к повторным запросам
       tags:
         - Scoreboard
       operationId: updateScore
@@ -394,7 +411,15 @@ paths:
   /api/scoreboard/{game_id}/new-set:
     post:
       summary: Начать новый сет
-      description: Обнуляет счёт, инкрементирует номер сета
+      description: |
+        Обнуляет счёт, инкрементирует номер сета, применяет отложенные флаги
+        (смена сторон в классическом режиме).
+
+        Если выигранная партия ещё не была засчитана автоматически (например,
+        в режиме `unlimited_score` или при счёте, выставленном не через `/score`),
+        она засчитывается по текущему счёту перед сменой сета — как в `POST /period`.
+        При засчитывании решающей партии матч завершается (`classic_match_finished`
+        / `beach_match_finished`) и результат сохраняется в коллекцию матчей.
       tags:
         - Scoreboard
       operationId: newSet
@@ -908,15 +933,24 @@ components:
           example: 12
         home_sets:
           type: integer
+          description: Выигранные сеты — только пляжный режим (beach_mode)
           example: 1
         away_sets:
           type: integer
+          description: Выигранные сеты — только пляжный режим (beach_mode)
           example: 0
         home_fouls:
           type: integer
+          description: |
+            В классическом режиме — выигранные сеты домашней команды
+            (в пляжном режиме сеты хранятся в home_sets/away_sets).
+            Счёт меняется только через POST /api/scoreboard/{game_id}/score.
           example: 1
         away_fouls:
           type: integer
+          description: |
+            В классическом режиме — выигранные сеты гостевой команды
+            (в пляжном режиме сеты хранятся в home_sets/away_sets).
           example: 0
         home_timeouts:
           type: integer
@@ -1043,11 +1077,14 @@ components:
       description: |
         Разрешённые поля для обновления:
         home_team, away_team, home_color, away_color, tournament_name, venue,
-        custom_label, show, home_score, away_score, home_fouls, away_fouls,
+        custom_label, show, home_fouls, away_fouls,
         home_sets, away_sets, current_period, period_count, home_side, away_side,
         beach_mode, beach_current_set, beach_switch_message, beach_match_finished,
         classic_match_finished, classic_tiebreak_switch_done, two_wins_mode,
         invert_tablo, unlimited_score, set_history, home_timeouts, away_timeouts
+
+        `home_score`/`away_score` доступны только для чтения: запись через PATCH
+        отклоняется с `400`, очки принимаются через `POST /score`.
       properties:
         home_team:
           type: string
@@ -1068,16 +1105,24 @@ components:
           enum: [0, 1, 2, 4, 6, 14]
         home_score:
           type: integer
+          readOnly: true
+          description: Только чтение — очки принимаются через POST /api/scoreboard/{game_id}/score
         away_score:
           type: integer
+          readOnly: true
+          description: Только чтение — очки принимаются через POST /api/scoreboard/{game_id}/score
         home_fouls:
           type: integer
+          description: Выигранные сеты в классическом режиме (в пляжном — home_sets)
         away_fouls:
           type: integer
+          description: Выигранные сеты в классическом режиме (в пляжном — away_sets)
         home_sets:
           type: integer
+          description: Выигранные сеты в пляжном режиме (в классическом — home_fouls)
         away_sets:
           type: integer
+          description: Выигранные сеты в пляжном режиме (в классическом — away_fouls)
         current_period:
           type: integer
         period_count:
