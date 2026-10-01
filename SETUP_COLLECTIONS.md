@@ -216,8 +216,9 @@ Access to fetch at 'http://zago.my.to:8090/...' has been blocked by CORS policy
 
 ```javascript
 pocketbase: {
-  // same-origin: nginx проксирует /pb/ → контейнер pocketbase:8090 (внутри docker)
-  url: '/pb/',
+  // same-origin: nginx проксирует <APP_PREFIX>pb/ (по умолчанию /vb/pb/)
+  // → контейнер pocketbase:8090 (внутри docker). Префикс задаётся APP_PREFIX.
+  url: '/vb/pb/',
   adminEmail: 'supervisor@volleyball.local',
   adminPassword: 'Mer1in00'
 }

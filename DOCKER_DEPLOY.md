@@ -1,4 +1,20 @@
 # Docker Deploy — Volleyball Scoreboard
+Кратко последовательность действий:
+1. Собираем образ
+docker compose build
+Если хотим установить на локальный компьютер, то
+docker compose up -d --build
+2. Сохраняем образы 
+docker save vb_mobile-pocketbase:0.36.6 vb_mobile-server:latest vb_mobile-frontend | gzip > deploy/vb_mobile-images.tar.gz
+3. Копируем образы на сервер
+scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz  zago@10.74.8.75:/tmp/
+# Если необходимо скопировать новые файлы для docker compose:
+# scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz docker-compose.yml docker-compose.pb.yml .env pb_schema.json scripts/init-pocketbase.sh  zago@10.74.8.75:/tmp/
+
+4. На сервере в каталоге с проектом (/opt/volleyball-mobile)
+docker compose down
+gunzip -c /tmp/vb_mobile-images.tar.gz | docker load 
+docker compose up -d
 
 Полная инструкция по сборке Docker-образа API-сервера, копированию на удалённый сервер и запуску через Docker Compose / Docker Swarm.
 
@@ -50,7 +66,8 @@
 
 - **pocketbase** — собирается из `dockerfile.pb` (бинарник с официального релиза, `PB_VERSION`);
 - **server** — Node.js API (`server/Dockerfile`, контекст — корень репозитория);
-- **frontend** — свой образ из `Dockerfile.frontend` (статика + nginx с прокси `/pb/`).
+- **frontend** — свой образ из `Dockerfile.frontend` (статика + nginx с прокси
+  `<APP_PREFIX>pb/` и `<APP_PREFIX>api/`).
 
 ### 1. Собрать образы
 
@@ -64,6 +81,18 @@ docker compose build
 docker compose build server
 ```
 
+> 💡 Если первый проход упал на загрузке базовых образов
+> (`failed to resolve source metadata ... alpine/node/nginx`, `dial tcp ...`) —
+> registry docker.io был временно недоступен. Повторите сборку или
+> воспользуйтесь скриптом с автоматическими повторами (только сетевые
+> ошибки ретраятся, ошибки Dockerfile — нет):
+>
+> ```bash
+> ./scripts/build.sh              # все сервисы, до 3 попыток с backoff
+> ./scripts/build.sh server       # только API
+> BUILD_ATTEMPTS=5 ./scripts/build.sh
+> ```
+
 > ⚠️ Собирать нужно **из корня репозитория**: у сервисов `server` и `frontend`
 > `context: .` — образы запекают `js/`, `credentials.js`, `pb_schema.json` и
 > статику. Отдельный `cd server && docker build .` больше не работает.
@@ -73,36 +102,84 @@ docker compose build server
 - `vb_mobile-server:latest` — ~200-300 МБ (node:18-alpine + зависимости)
 - `vb_mobile-frontend:latest` — nginx:alpine + статика
 
-### 1.1. Порт PocketBase подставляется при сборке
+### 1.1. Порт PocketBase внутри сети всегда 8090
 
-Порт PocketBase из `.env` (`POCKETBASE_PORT`, по умолчанию `8090`) попадает
-внутрь образов **на этапе сборки** — менять его после сборки без пересборки нельзя.
+Внутри docker-сети контейнер PocketBase слушает **всегда `8090`**
 
-Как это работает:
+(`dockerfile.pb`: `--http=0.0.0.0:8090`). `POCKETBASE_PORT` из `.env`
 
-1. в исходнике `js/db-config.js` фоллбэк записан заглушкой:
-   `'http://pocketbase:__POCKETBASE_PORT__'`;
-2. `docker-compose.yml` передаёт значение из `.env` в сборку обоих образов:
-   `build.args.POCKETBASE_PORT: ${POCKETBASE_PORT:-8090}`;
-3. `server/Dockerfile` и `Dockerfile.frontend` объявляют `ARG POCKETBASE_PORT`
-   и выполняют `RUN sed -i "s/__POCKETBASE_PORT__/${POCKETBASE_PORT}/" ...`
-   над запечённым `js/db-config.js`.
+— это **только хостовая публикация** `0.0.0.0:${POCKETBASE_PORT}:8090`
+(внешний доступ задуман): внутри сети на этом порту ничего не слушает,
+поэтому подставлять его в адреса `pocketbase:<порт>` **нельзя**
+(будет `connection refused`).
 
-Так адрес в фоллбэке всегда совпадает с реальным портом контейнера PocketBase:
-контейнер PB всегда слушает внутри сети `8090`, а `POCKETBASE_PORT` — это порт
-публикации на хосте (`127.0.0.1:${POCKETBASE_PORT}:8090`, только loopback).
+Отсюда правила:
+
+- `POCKETBASE_URL` в `.env` — адрес **внутри сети**, всегда
+  `http://pocketbase:8090` (меняется только для внешней/хостовой БД вне стека);
+- фоллбэк в `js/db-config.js` — тоже всегда `http://pocketbase:8090`
+  (внутрь образов хостовой порт НЕ запекается, поэтому при смене
+  `POCKETBASE_PORT` пересборка не нужна — достаточно `docker compose up -d`);
+- браузер ходит к БД и API по **уникальному префиксу** `<APP_PREFIX>` (по
+  умолчанию `/vb/`), а не по корневым `/pb/`, `/api/` — чтобы не конфликтовать
+  с чужими путями на общем домене и с внешним reverse-proxy;
+- `credentials.js` отдаёт пути `<APP_PREFIX>pb/` (`pocketbase.url`) и
+  `<APP_PREFIX>api/` (`server.prefix`), а nginx фронтенда
+  (`nginx.conf.template`) проксирует их в **docker-имена сервисов**
+  `pocketbase:8090` и `server:3000` соответственно;
+- префикс подставляется в конфиг nginx на старте контейнера из `APP_PREFIX`
+  (envsubst) и тем же значением отдаётся браузеру — `/vb-config.js` →
+  `window.VB_APP_PREFIX`, поэтому смена префикса не требует пересборки;
+- сервер, в свою очередь, обращается к БД напрямую —
+  `POCKETBASE_URL=http://pocketbase:8090`.
 
 ```bash
-# Порт изменить ДО сборки — иначе образы останутся на 8090
-POCKETBASE_PORT=9090 docker compose build        # затем: docker compose up -d
-
-# Проверить, что значение запечено
+# Проверить текущее значение внутри собранных образов (должен быть 8090)
 docker run --rm --entrypoint grep vb_mobile-server:latest \
   'pocketbase:' /usr/src/js/db-config.js
 ```
 
 > ⚠️ Образы собираются под архитектуру машины сборки. Для сервера с другой
 > архитектурой (например, arm64) используйте `docker buildx build --platform`.
+
+### 1.2. Развёртывание под подпутём (`https://домен/myvb/`)
+
+Приложение можно опубликовать не от корня домена, а под подпутём — пути БД/API
+подстраиваются автоматически:
+
+- `credentials.js` (`_appDir()`) строит их от **каталога текущей страницы**:
+  под подпутём получается `/myvb/vb/pb/` и `/myvb/vb/api/`, в корне — `/vb/pb/`;
+- `sw.js` (service worker) и `manifest.json` используют **относительные** пути.
+
+Требование к внешнему reverse-proxy — **срезать** подпуть при проксировании в
+контейнер фронтенда, чтобы внутри него пути остались `/vb/pb/`, `/vb/api/` и
+статика (`APP_PREFIX` в `.env` менять при этом НЕ нужно):
+
+```nginx
+# Внешний nginx на хосте: https://домен/myvb/ → контейнер фронтенда
+location /myvb/ {
+    proxy_pass http://127.0.0.1:8081/;   # завершающий '/' обязателен — срезает /myvb/
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # SSE realtime (<APP_PREFIX>pb/api/realtime): без буферизации
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+}
+```
+
+Проверка (подставьте свой домен/подпуть):
+
+```bash
+curl -s https://домен/myvb/vb-config.js      # window.VB_APP_PREFIX="/vb/";
+curl -s https://домен/myvb/vb/pb/api/health  # {"message":"API is healthy.",...}
+```
+
+> ⚠️ Если в браузере ранее открывалась старая версия — очистите кэш или сделайте
+> Ctrl+Shift+R: service worker мог закешировать прежние (корневые) пути. Версия
+> кэша в `sw.js` поднята до `v12`, поэтому новый SW перезапишет старый кэш.
+
 
 ---
 
@@ -126,8 +203,13 @@ curl http://localhost:3000/health
 # Swagger UI (включён по умолчанию: ENABLE_SWAGGER=true)
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/api-docs/
 
-# PocketBase через прокси фронтенда (так же ходит браузер)
-curl http://localhost:8080/pb/api/health
+# PocketBase через прокси фронтенда (так же ходит браузер).
+# APP_PREFIX по умолчанию /vb/ (см. .env)
+curl http://localhost:8080/vb/pb/api/health
+
+# API сервер через прокси фронтенда (так же ходит браузер: <APP_PREFIX>api/...)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/vb/api/auth/log
+#    200 — nginx проксирует <APP_PREFIX>api/ в server:3000; 502 — server не запущен
 
 # Frontend
 curl -s http://localhost:8080 | head -10
@@ -168,6 +250,11 @@ ls -lh deploy/vb_mobile-server.tar.gz
 ```
 
 Если используется docker compose, можно сохранить конкретный образ по ID:
+
+docker save vb_mobile-pocketbase:0.36.6 vb_mobile-server:latest vb_mobile-frontend | gzip > deploy/vb_mobile-images.tar.gz
+scp -o "ProxyJump zago@zago.404.mn:11022" deploy/vb_mobile-images.tar.gz  zago@10.74.8.75:/tmp/
+scp -o "ProxyJump zago@zago.404.mn:11022" docker-compose.yml docker-compose.pb.yml .env pb_schema.json scripts/init-pocketbase.sh  zago@10.74.8.75:/tmp/
+
 
 ```bash
 # Узнать ID образа
@@ -287,7 +374,7 @@ EOF
 вручную, необходим минимум:
 
 ```bash
-scp docker-compose.yml docker-compose.pb.yml dockerfile.pb nginx.conf \
+scp docker-compose.yml docker-compose.pb.yml dockerfile.pb nginx.conf.template \
     credentials.js pb_schema.json \
     user@server.example.com:/opt/volleyball-mobile/
 scp -r scripts server user@server.example.com:/opt/volleyball-mobile/
@@ -532,7 +619,7 @@ services:
       - "${FRONTEND_PORT:-8080}:80"
     volumes:
       - ./:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
     deploy:
       replicas: 2
       restart_policy:
@@ -607,16 +694,18 @@ frontend). Явный флаг `-f docker-compose.yml` перекрывает `C
 
 Порты и переменные PocketBase-контейнера (`POCKETBASE_ENV`, `PB_VERSION`,
 `POCKETBASE_MEMORY_LIMIT`) используются только файлом `docker-compose.pb.yml`.
-Дополнительно `POCKETBASE_PORT` участвует в **сборке** образов `server` и
-`frontend`: он передаётся как `build.args` и подставляется в запечённый
-`js/db-config.js` (см. «Локальная сборка → 1.1»). Поэтому при смене
-`POCKETBASE_PORT` образы нужно пересобрать.
+`POCKETBASE_PORT` — **только хостовая публикация** `0.0.0.0:${POCKETBASE_PORT}:8090`
+(внутрь образов он НЕ запекается: фоллбэк в `js/db-config.js` — всегда
+`http://pocketbase:8090`, см. «Локальная сборка → 1.1»). Поэтому при смене
+`POCKETBASE_PORT` пересборка образов **не нужна** — достаточно
+`docker compose up -d`.
 
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
-| POCKETBASE_PORT | 8090 | Порт публикации PocketBase на хосте; **также build-arg** для `server`/`frontend` |
+| POCKETBASE_PORT | 8090 | Только хостовая публикация PocketBase (`0.0.0.0:порт→8090`); внутрь образов не запекается |
 | API_PORT | 3000 | Порт API сервера (только хостовой; внутри контейнера фиксирован 3000) |
 | FRONTEND_PORT | 8080 | Порт фронтенда |
+| APP_PREFIX | /vb/ | Уникальный префикс same-origin путей (`<префикс>pb/`, `<префикс>api/`); рендерится в nginx из шаблона и отдаётся браузеру в `/vb-config.js` |
 | POCKETBASE_ENV | production | Режим PocketBase |
 | POCKETBASE_URL | http://pocketbase:8090 | URL PocketBase для API |
 | POCKETBASE_ADMIN_EMAIL | admin@volleyball.local | Email админа PB |
@@ -693,22 +782,27 @@ ALLOWED_ORIGINS=https://ваш-домен.ru
 
 ### 5. Кнопка «Сохранить» не работает, в консоли браузера ошибки сети
 
-Браузер ходит в PocketBase через **same-origin путь `/pb/`** (см. `credentials.js`
-→ `pocketbase.url`): nginx фронтенда проксирует `/pb/` в контейнер `pocketbase`
-(см. `nginx.conf`, location `/pb/`). Если сохранение не работает:
+Браузер ходит в PocketBase через **same-origin путь `<APP_PREFIX>pb/`** (по
+умолчанию `/vb/pb/`; см. `credentials.js` → `pocketbase.url`): nginx фронтенда
+проксирует его в контейнер `pocketbase` (см. `nginx.conf.template`, location
+`${APP_PREFIX}pb/`). Если сохранение не работает:
 
 ```bash
 # 1) прокси отвечает JSON'ом PocketBase (а не HTML мобильной страницы)?
-curl http://localhost:8080/pb/api/health
+curl http://localhost:8080/vb/pb/api/health
 #    {"message":"API is healthy.",...}
 
 # 2) если 502 — контейнер pocketbase не запущен или называется иначе
 docker compose ps
 # для внешней/хостовой БД: nginx не найдёт контейнер "pocketbase" —
-# тогда замените upstream в nginx.conf (set $pb_upstream ...) на адрес БД
+# тогда замените upstream в nginx.conf.template (set $pb_upstream ...) на адрес БД
 ```
 
-После изменения `nginx.conf` перечитайте конфиг:
+Префикс задаётся переменной `APP_PREFIX` (.env): при её смене достаточно
+`docker compose up -d frontend` — пересборка не нужна (nginx рендерит конфиг из
+шаблона при старте и отдаёт префикс браузеру в `/vb-config.js`).
+После изменения самого шаблона пересоберите фронтенд
+(`docker compose build frontend`) и перечитайте конфиг:
 `docker exec volleyball_frontend nginx -s reload`.
 Также выполните жёсткое обновление страницы (Ctrl+Shift+R), чтобы браузер
 забрал свежий `credentials.js` (service worker кэширует GET-ответы).
@@ -762,8 +856,9 @@ vb_mobile/
 ├── pb_data/                   # Данные PocketBase (создаётся при запуске)
 ├── docker-stack.yml           # Оркестрация (Swarm) — создать отдельно
 ├── .env                       # Переменные окружения проекта
-├── nginx.conf                 # Конфиг Nginx
+├── nginx.conf.template        # Шаблон конфига Nginx (envsubst: APP_PREFIX)
 ├── credentials.js             # Учётные данные БД (фронтенд + сервер)
+├── vb-config.js               # Fallback-префикс путей (в Docker отдаёт nginx из APP_PREFIX)
 ├── server/
 │   ├── Dockerfile             # Сборка образа API
 │   ├── .dockerignore          # Исключения для Docker build

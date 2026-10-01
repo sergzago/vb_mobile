@@ -21,6 +21,21 @@ function checkDb(dbAdapter) {
   }
 }
 
+// === D2: сериализация read-modify-write операций в рамках одной игры ===
+// Один Node-процесс: цепочка промисов на game_id не даёт параллельным запросам
+// прочитать одно и то же состояние и потерять очки/двойно засчитать партию.
+const _gameLocks = new Map();
+
+function _withGameLock(gameId, fn) {
+  const prev = _gameLocks.get(gameId) || Promise.resolve();
+  const run = prev.then(fn);
+  const tail = run.then(() => {}, () => {});
+  _gameLocks.set(gameId, tail);
+  return run.finally(() => {
+    if (_gameLocks.get(gameId) === tail) _gameLocks.delete(gameId);
+  });
+}
+
 /**
  * Сервис для работы с табло
  */
@@ -57,7 +72,7 @@ class ScoreboardService {
       away_team: data.away_team || 'Team2',
       home_color: data.home_color || '#ff0000',
       away_color: data.away_color || '#00ff00',
-      tournament_name: data.tournament_name || 'НВЛ',
+      tournament_name: data.tournament_name || '-',
       venue: data.venue || '',
       home_score: 0,
       away_score: 0,
@@ -102,18 +117,101 @@ class ScoreboardService {
   }
 
   /**
-   * Изменить счёт (основная логика из ctl.js)
+   * Изменить счёт (основная логика из ctl.js).
+   * Выполняется под блокировкой игры (D2), внутри — revert-семантика
+   * фронтенда для «-1» при ожидающейся новой партии (D1).
    */
   async updateScore(gameId, team, delta) {
+    return _withGameLock(gameId, () => this._updateScoreLocked(gameId, team, delta));
+  }
+
+  async _updateScoreLocked(gameId, team, delta) {
     const data = await this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
     if (!data) throw new Error('Scoreboard not found');
 
+    // D1: откат выигранной партии. Если партия уже засчитана (pending_new_set),
+    // «-1» выигравшей команды возвращает счёт по сетам, историю и pending-флаги
+    // к состоянию до выигрыша (порт revert-логики mobile.js/ctl.js).
+    if (delta < 0 && data.pending_new_set) {
+      const revert = this._buildSetRevertUpdate(data, team);
+      if (revert) {
+        revert.lastEdited = this.db.serverTimestamp();
+        await this.db.updateDoc(VOLLEYBALL_COLLECTION, gameId, revert);
+        return this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
+      }
+    }
+
     const beachMode = !!data.beach_mode;
+
+    // Ожидание нового сета: партия уже засчитана, очки не принимаются.
+    // Во фронтенде кнопки счёта в этот момент заблокированы (mobile.js), а на
+    // уровне API игнорирование защищает от повторных/параллельных запросов —
+    // иначе к завершённой партии дописалось бы «лишнее» очко (25:23 -> 26:23).
+    if (delta > 0 && data.pending_new_set) {
+      return data;
+    }
+
     if (beachMode) {
       return this._handleBeachScore(gameId, data, team, delta);
     } else {
       return this._handleClassicScore(gameId, data, team, delta);
     }
+  }
+
+  /**
+   * D1: объект обновления для отката выигранной партии.
+   * Возвращает null, если откат не применим (команда не выигрывала партию /
+   * история пуста и счёт равен).
+   */
+  _buildSetRevertUpdate(data, team) {
+    const history = Array.isArray(data.set_history) ? data.set_history.slice() : [];
+    const last = history.length ? history[history.length - 1] : null;
+    const homeScore = this._ensureNumber(data.home_score);
+    const awayScore = this._ensureNumber(data.away_score);
+
+    // Победитель партии — по последней записи истории; при её отсутствии —
+    // по текущему счёту (при pending_new_set счёт финальный)
+    let winner = null;
+    if (last) {
+      winner = last.home > last.away ? 'home' : (last.away > last.home ? 'away' : null);
+    } else if (homeScore !== awayScore) {
+      winner = homeScore > awayScore ? 'home' : 'away';
+    }
+    if (!winner || winner !== team) return null;
+
+    const beachMode = !!data.beach_mode;
+    const update = { home_timeouts: 0, away_timeouts: 0 };
+
+    if (last) history.pop();
+    update.set_history = history;
+
+    if (beachMode) {
+      if (winner === 'home') {
+        update.home_sets = Math.max(0, this._ensureNumber(data.home_sets) - 1);
+        update.home_score = Math.max(0, homeScore - 1);
+      } else {
+        update.away_sets = Math.max(0, this._ensureNumber(data.away_sets) - 1);
+        update.away_score = Math.max(0, awayScore - 1);
+      }
+      update.next_beach_set = null;
+      update.pending_new_set = null;
+      update.beach_match_finished = false;
+    } else {
+      if (winner === 'home') {
+        update.home_fouls = Math.max(0, this._ensureNumber(data.home_fouls) - 1);
+        update.home_score = Math.max(0, homeScore - 1);
+      } else {
+        update.away_fouls = Math.max(0, this._ensureNumber(data.away_fouls) - 1);
+        update.away_score = Math.max(0, awayScore - 1);
+      }
+      update.next_period = null;
+      update.pending_home_side = null;
+      update.pending_away_side = null;
+      update.pending_classic_tiebreak_switch_done = null;
+      update.pending_new_set = null;
+      update.classic_match_finished = false;
+    }
+    return update;
   }
 
   /**
@@ -155,8 +253,10 @@ class ScoreboardService {
     const homeAfterScore = team === 'home' ? newScore : otherScore;
     const awayAfterScore = team === 'home' ? otherScore : newScore;
 
-    // Победа в сете
-    if (delta > 0 && this._hasTeamWonSet(team, homeAfterScore, awayAfterScore, target)) {
+    // Победа в сете (не повторно: при уже засчитанной партии — pending_new_set —
+    // повторный +1 не должен засчитать её второй раз, D1)
+    if (delta > 0 && !data.pending_new_set
+        && this._hasTeamWonSet(team, homeAfterScore, awayAfterScore, target)) {
       return this._applyBeachSetWin(gameId, data, team, homeAfterScore, awayAfterScore, update);
     }
 
@@ -202,9 +302,12 @@ class ScoreboardService {
       }
     }
 
-    // Проверка победы в сете (если не безлимитный счёт)
+    // Проверка победы в сете (если не безлимитный счёт).
+    // При pending_new_set партия уже засчитана — повторное засчитывание
+    // исключено (D1: двойной счёт сетов и ложный финиш матча).
     const unlimitedScore = !!data.unlimited_score;
-    if (delta > 0 && !unlimitedScore && this._classicSetWon(newScore, otherScore, data)) {
+    if (delta > 0 && !unlimitedScore && !data.pending_new_set
+        && this._classicSetWon(newScore, otherScore, data)) {
       return this._applyClassicSetWin(gameId, data, team, newScore, otherScore, update);
     }
 
@@ -213,17 +316,148 @@ class ScoreboardService {
   }
 
   /**
-   * Новый сет
+   * Новый сет.
+   * D4: если выигранная партия не была засчитана автоматически (режим
+   * unlimited_score или счёт выставлен не через POST /score), она засчитывается
+   * по текущему счёту перед сменой сета — как это делает POST /period.
    */
   async newSet(gameId) {
+    return _withGameLock(gameId, () => this._newSetLocked(gameId));
+  }
+
+  async _newSetLocked(gameId) {
     const data = await this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
     if (!data) throw new Error('Scoreboard not found');
 
-    const update = {
+    const beachMode = !!data.beach_mode;
+    const pendingNewSet = !!data.pending_new_set;
+    const matchFinished = beachMode
+      ? !!data.beach_match_finished
+      : !!data.classic_match_finished;
+
+    // D4: ручное засчитывание партии, пропущенной авто-детекцией
+    if (!pendingNewSet && !matchFinished && this._setWonByCurrentScore(data)) {
+      const counted = this._countCurrentSet(data);
+
+      if (counted.matchFinished) {
+        // Финальная партия: матч завершается, период и счёт не сбрасываются
+        counted.update.lastEdited = this.db.serverTimestamp();
+        await this.db.updateDoc(VOLLEYBALL_COLLECTION, gameId, counted.update);
+
+        const overallHome = counted.update.home_fouls !== undefined
+          ? counted.update.home_fouls : counted.update.home_sets;
+        const overallAway = counted.update.away_fouls !== undefined
+          ? counted.update.away_fouls : counted.update.away_sets;
+
+        await this.saveMatchResult(gameId, {
+          setHistory: counted.update.set_history,
+          overallHome,
+          overallAway,
+        });
+        return this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
+      }
+
+      // Не финал: засчитанные поля (фолы/сеты, история, pending-флаги для смены
+      // сторон) применяются вместе с обычной сменой сета
+      const effective = Object.assign({}, data, counted.update);
+      return this._applyNewSet(gameId, effective, counted.update);
+    }
+
+    return this._applyNewSet(gameId, data);
+  }
+
+  /**
+   * D4: признак победы в сете по текущему счёту (авто-детекция была пропущена)
+   */
+  _setWonByCurrentScore(data) {
+    const homeScore = this._ensureNumber(data.home_score);
+    const awayScore = this._ensureNumber(data.away_score);
+    if (homeScore === awayScore) return false;
+
+    if (data.beach_mode) {
+      const target = this._getBeachTarget(this._getBeachSetNumber(data));
+      return this._hasTeamWonSet('home', homeScore, awayScore, target)
+        || this._hasTeamWonSet('away', homeScore, awayScore, target);
+    }
+
+    return this._classicSetWon(homeScore, awayScore, data)
+      || this._classicSetWon(awayScore, homeScore, data);
+  }
+
+  /**
+   * D4: засчитать партию по текущему счёту.
+   * Возвращает { update, matchFinished }: update — поля для записи
+   * (история сетов, фолы/сеты, при не-финале — pending-поля смены сторон).
+   */
+  _countCurrentSet(data) {
+    const homeScore = this._ensureNumber(data.home_score);
+    const awayScore = this._ensureNumber(data.away_score);
+    const winnerHome = homeScore > awayScore;
+
+    const history = Array.isArray(data.set_history)
+      ? data.set_history.slice(0, MAX_CLASSIC_SETS) : [];
+    history.push({ home: homeScore, away: awayScore });
+    if (history.length > MAX_CLASSIC_SETS) history.shift();
+
+    const update = { set_history: history };
+
+    if (data.beach_mode) {
+      let homeSets = this._ensureNumber(data.home_sets);
+      let awaySets = this._ensureNumber(data.away_sets);
+      if (winnerHome) homeSets++; else awaySets++;
+      update.home_sets = homeSets;
+      update.away_sets = awaySets;
+
+      const matchFinished = homeSets >= BEACH_SETS_TO_WIN || awaySets >= BEACH_SETS_TO_WIN;
+      if (matchFinished) update.beach_match_finished = true;
+      return { update, matchFinished };
+    }
+
+    let homeFouls = this._ensureNumber(data.home_fouls);
+    let awayFouls = this._ensureNumber(data.away_fouls);
+    if (winnerHome) homeFouls++; else awayFouls++;
+    update.home_fouls = homeFouls;
+    update.away_fouls = awayFouls;
+
+    const twoWinsMode = !!data.two_wins_mode;
+    const setsToWin = twoWinsMode ? CLASSIC_SETS_TO_WIN_TWO : CLASSIC_SETS_TO_WIN;
+    const matchFinished = homeFouls >= setsToWin || awayFouls >= setsToWin;
+
+    if (matchFinished) {
+      update.classic_match_finished = true;
+      update.classic_tiebreak_switch_done = true;
+      return { update, matchFinished };
+    }
+
+    // Аналог _applyClassicSetWin (не финал): pending-поля, которые
+    // _applyNewSet применит сразу (смена сторон, следующий период)
+    const currentHomeSide = data.home_side || 'left';
+    const newHomeSide = currentHomeSide === 'left' ? 'right' : 'left';
+    const tiebreakSet = twoWinsMode ? 3 : 5;
+    const currentPeriod = this._ensureNumber(data.current_period) || 1;
+    const maxPeriod = this._ensureNumber(data.period_count) || 5;
+    const nextPeriod = currentPeriod < maxPeriod ? currentPeriod + 1 : currentPeriod;
+
+    update.next_period = nextPeriod;
+    update.pending_home_side = newHomeSide;
+    update.pending_away_side = newHomeSide === 'left' ? 'right' : 'left';
+    update.pending_classic_tiebreak_switch_done = nextPeriod !== tiebreakSet;
+    update.pending_new_set = true;
+    return { update, matchFinished: false };
+  }
+
+  /**
+   * Применить новый сет: обнулить счёт, перейти к следующему сету/периоду,
+   * применить отложенные флаги (смена сторон).
+   * extra — дополнительные поля, записываемые вместе со сменой сета
+   * (например, засчитанная вручную партия, D4).
+   */
+  async _applyNewSet(gameId, data, extra = {}) {
+    const update = Object.assign({
       home_score: 0,
       away_score: 0,
       beach_switch_message: '',
-    };
+    }, extra);
 
     if (data.beach_mode) {
       let nextSet = data.next_beach_set || this._ensureNumber(data.beach_current_set) + 1;
@@ -279,9 +513,13 @@ class ScoreboardService {
   }
 
   /**
-   * Изменить период
+   * Изменить период (под блокировкой игры, D2)
    */
   async updatePeriod(gameId, delta) {
+    return _withGameLock(gameId, () => this._updatePeriodLocked(gameId, delta));
+  }
+
+  async _updatePeriodLocked(gameId, delta) {
     const data = await this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
     if (!data) throw new Error('Scoreboard not found');
 
@@ -347,7 +585,7 @@ class ScoreboardService {
       home_color: teamsData.home_color,
       away_team: teamsData.away_team,
       away_color: teamsData.away_color,
-      tournament_name: teamsData.tournament_name || 'НВЛ',
+      tournament_name: teamsData.tournament_name || '-',
     };
     if (teamsData.venue !== undefined) {
       update.venue = teamsData.venue;
@@ -428,7 +666,7 @@ class ScoreboardService {
       away_color: keepSettings ? data.away_color : '#00ff00',
       home_team: keepSettings ? data.home_team : 'Team1',
       home_color: keepSettings ? data.home_color : '#ff0000',
-      tournament_name: keepSettings ? data.tournament_name : 'НВЛ',
+      tournament_name: keepSettings ? data.tournament_name : '-',
       venue: keepSettings ? data.venue : '',
       home_sets: 0, away_sets: 0,
       home_timeouts: 0, away_timeouts: 0,
@@ -472,7 +710,7 @@ class ScoreboardService {
       date_time: this.db.serverTimestamp(),
       home_team: data.home_team,
       away_team: data.away_team,
-      tournament_name: data.tournament_name || 'НВЛ',
+      tournament_name: data.tournament_name || '-',
       overall_score: `${overallHome}:${overallAway}`,
       sets_score: overrideData?.setHistory || data.set_history || [],
       game_type: isBeach ? 'beach' : 'classic',

@@ -1,15 +1,17 @@
-const CACHE_NAME = 'volleyball-scoreboard-v10';
+const CACHE_NAME = 'volleyball-scoreboard-v12';
 const ASSETS = [
-  '/mobile.html',
-  '/css/mobile.css',
-  '/js/mobile.js',
-  '/js/mobile-admin.js',
-  '/js/templates_visual_mobile.js',
-  '/js/db-config.js',
-  '/js/db-interface.js',
-  '/js/auth.js',
-  '/js/common.js',
-  '/js/jquery-3.4.1.min.js'
+  // Пути ОТНОСИТЕЛЬНЫЕ: так они работают и в корне домена, и под подпутём
+  // (https://host/myvb/) — service worker резолвит их от своего URL.
+  'mobile.html',
+  'css/mobile.css',
+  'js/mobile.js',
+  'js/mobile-admin.js',
+  'js/templates_visual_mobile.js',
+  'js/db-config.js',
+  'js/db-interface.js',
+  'js/auth.js',
+  'js/common.js',
+  'js/jquery-3.4.1.min.js'
 ];
 
 self.addEventListener('install', function(event) {
