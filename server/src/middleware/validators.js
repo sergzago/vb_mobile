@@ -28,7 +28,8 @@ function errorHandler(err, req, res, next) {
   }
 
   if (msg.startsWith('Period must be between') || 
-      msg.startsWith('Invalid show value')) {
+      msg.startsWith('Invalid show value') ||
+      msg.startsWith('Invalid custom setting')) {
     return res.status(400).json({
       error: 'Bad Request',
       message: err.message,
@@ -106,15 +107,29 @@ function validatePeriodDelta(req, res, next) {
 }
 
 /**
- * Middleware для валидации режима
+ * Middleware для валидации режима (beach_mode и/или custom_mode)
  */
 function validateMode(req, res, next) {
-  const { beach_mode } = req.body;
-  
-  if (typeof beach_mode !== 'boolean') {
+  const { beach_mode, custom_mode } = req.body;
+
+  if (beach_mode === undefined && custom_mode === undefined) {
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: 'beach_mode or custom_mode is required',
+    });
+  }
+
+  if (beach_mode !== undefined && typeof beach_mode !== 'boolean') {
     return res.status(400).json({
       error: 'Bad Request',
       message: 'beach_mode must be a boolean',
+    });
+  }
+
+  if (custom_mode !== undefined && typeof custom_mode !== 'boolean') {
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: 'custom_mode must be a boolean',
     });
   }
 

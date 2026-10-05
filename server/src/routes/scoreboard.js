@@ -96,6 +96,10 @@ router.patch('/:game_id', validateGameId, async (req, res, next) => {
       'beach_switch_message', 'beach_match_finished', 'classic_match_finished',
       'classic_tiebreak_switch_done', 'two_wins_mode', 'invert_tablo',
       'unlimited_score', 'set_history', 'home_timeouts', 'away_timeouts',
+      // Произвольный вариант игры
+      'custom_mode', 'matchmode',
+      'count_wins', 'score_wins', 'score_tie', 'balance',
+      'score_change', 'count_timeouts',
     ];
     
     const filteredData = {};
@@ -240,14 +244,13 @@ router.patch('/:game_id/settings', validateGameId, async (req, res, next) => {
 
 /**
  * @route   POST /api/scoreboard/:game_id/mode
- * @desc    Переключить режим (пляжный/классический)
+ * @desc    Переключить режим (пляжный/классический/произвольный)
  */
 router.post('/:game_id/mode', validateGameId, validateMode, async (req, res, next) => {
   try {
     const { game_id } = req.params;
-    const { beach_mode } = req.body;
-    
-    const result = await getService(req).toggleMode(game_id, beach_mode);
+
+    const result = await getService(req).toggleMode(game_id, req.body);
     res.json(result);
   } catch (err) {
     next(err);

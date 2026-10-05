@@ -10,6 +10,17 @@ const CLASSIC_MAX_SETS_TWO = GAME_CONSTANTS.CLASSIC_MAX_SETS_TWO;
 const CLASSIC_TIEBREAK_POINTS_TO_WIN = GAME_CONSTANTS.CLASSIC_TIEBREAK_POINTS_TO_WIN;
 const MAX_CLASSIC_SETS = GAME_CONSTANTS.CLASSIC_MAX_SETS;
 
+// Значения по умолчанию произвольного режима (совпадают с мобильным интерфейсом)
+const CUSTOM_DEFAULTS = {
+  count_wins: 3,       // побед в матче (сетов)
+  score_wins: 25,      // очков в сет
+  score_tie: 15,       // очков в решающем сете
+  balance: false,      // баланс — победа только с разницей 2 очка
+  score_change: 7,     // смена сторон каждые N очков (0 — отключено)
+  count_timeouts: 2,   // таймаутов на команду за сет
+};
+const CUSTOM_PERIOD_COUNT = 9;
+
 /**
  * Проверка доступности БД
  */
@@ -64,7 +75,12 @@ class ScoreboardService {
     }
 
     const beachEnabled = !!data.beach_mode;
-    const twoWinsMode = !!data.two_wins_mode;
+    // Произвольный вариант: custom_mode или 5-й бит строки matchmode.
+    // Пляжный режим имеет приоритет (как в мобильном интерфейсе).
+    const customEnabled = !beachEnabled
+      && (data.custom_mode === true
+        || (typeof data.matchmode === 'string' && data.matchmode.length === 5 && data.matchmode[4] === '1'));
+    const twoWinsMode = !!data.two_wins_mode && !customEnabled;
 
     const scoreboard = {
       id: gameId,
@@ -83,7 +99,9 @@ class ScoreboardService {
       current_period: 1,
       beach_mode: beachEnabled,
       beach_current_set: 1,
-      period_count: beachEnabled ? 3 : (twoWinsMode ? 3 : 5),
+      period_count: customEnabled
+        ? CUSTOM_PERIOD_COUNT
+        : (beachEnabled ? 3 : (twoWinsMode ? 3 : 5)),
       show: 0,
       custom_label: data.custom_label || 'Табло',
       home_side: 'left',
@@ -95,10 +113,30 @@ class ScoreboardService {
       two_wins_mode: twoWinsMode,
       invert_tablo: !!data.invert_tablo,
       unlimited_score: !!data.unlimited_score,
+      custom_mode: customEnabled,
+      matchmode: this._buildMatchmode({
+        beach: beachEnabled,
+        two: twoWinsMode,
+        invert: !!data.invert_tablo,
+        unlimited: !!data.unlimited_score,
+        custom: customEnabled,
+      }),
       set_history: [],
       created: this.db.serverTimestamp(),
       lastEdited: this.db.serverTimestamp(),
     };
+
+    if (customEnabled) {
+      // Настройки произвольного варианта пишем только для custom-игр —
+      // как это делает мобильный клиент (buildSavePayload)
+      const custom = this._customSettings(data);
+      scoreboard.count_wins = custom.count_wins;
+      scoreboard.score_wins = custom.score_wins;
+      scoreboard.score_tie = custom.score_tie;
+      scoreboard.balance = custom.balance;
+      scoreboard.score_change = custom.score_change;
+      scoreboard.count_timeouts = custom.count_timeouts;
+    }
 
     return this.db.setDoc(VOLLEYBALL_COLLECTION, gameId, scoreboard);
   }
@@ -112,6 +150,9 @@ class ScoreboardService {
     if (!existing) throw new Error('Scoreboard not found');
 
     const { lastEdited, ...updateData } = data;
+    // Согласованность режимов: matchmode (5-битная маска, 5-й бит = custom),
+    // взаимное исключение режимов и period_count
+    this._normalizeModeUpdate(existing, updateData);
     updateData.lastEdited = this.db.serverTimestamp();
     return this.db.updateDoc(VOLLEYBALL_COLLECTION, gameId, updateData);
   }
@@ -286,8 +327,21 @@ class ScoreboardService {
     const homeAfter = team === 'home' ? newScore : this._ensureNumber(data.home_score);
     const awayAfter = team === 'home' ? otherScore : newScore;
 
-    // Смена сторон в тай-брейке при 8 очках
-    if (this._shouldClassicMidSwitch(homeAfter, awayAfter, data)) {
+    if (this._isCustomMode(data)) {
+      // Произвольный режим: смена сторон каждые N очков (score_change),
+      // 0 — смена сторон отключена. Порог — пересечение границы, кратной N.
+      const custom = this._customSettings(data);
+      const interval = custom.score_change;
+      const totalBefore = this._ensureNumber(data.home_score) + this._ensureNumber(data.away_score);
+      const totalAfter = totalBefore + delta;
+
+      if (delta > 0 && interval > 0
+          && Math.floor(totalAfter / interval) > Math.floor(totalBefore / interval)) {
+        update.classic_switch_needed = true;
+        update.classic_switch_message = `Смена площадок — счёт ${homeAfter}:${awayAfter}`;
+      }
+    } else if (this._shouldClassicMidSwitch(homeAfter, awayAfter, data)) {
+      // Смена сторон в тай-брейке при 8 очках
       if (!data.classic_switch_shown) {
         const twoWinsMode = !!data.two_wins_mode;
         const tiebreakSet = twoWinsMode ? 3 : 5;
@@ -419,8 +473,11 @@ class ScoreboardService {
     update.home_fouls = homeFouls;
     update.away_fouls = awayFouls;
 
+    const customMode = this._isCustomMode(data);
     const twoWinsMode = !!data.two_wins_mode;
-    const setsToWin = twoWinsMode ? CLASSIC_SETS_TO_WIN_TWO : CLASSIC_SETS_TO_WIN;
+    const setsToWin = customMode
+      ? this._customSettings(data).count_wins
+      : (twoWinsMode ? CLASSIC_SETS_TO_WIN_TWO : CLASSIC_SETS_TO_WIN);
     const matchFinished = homeFouls >= setsToWin || awayFouls >= setsToWin;
 
     if (matchFinished) {
@@ -435,13 +492,16 @@ class ScoreboardService {
     const newHomeSide = currentHomeSide === 'left' ? 'right' : 'left';
     const tiebreakSet = twoWinsMode ? 3 : 5;
     const currentPeriod = this._ensureNumber(data.current_period) || 1;
-    const maxPeriod = this._ensureNumber(data.period_count) || 5;
+    const maxPeriod = this._ensureNumber(data.period_count)
+      || (customMode ? CUSTOM_PERIOD_COUNT : 5);
     const nextPeriod = currentPeriod < maxPeriod ? currentPeriod + 1 : currentPeriod;
 
     update.next_period = nextPeriod;
     update.pending_home_side = newHomeSide;
     update.pending_away_side = newHomeSide === 'left' ? 'right' : 'left';
-    update.pending_classic_tiebreak_switch_done = nextPeriod !== tiebreakSet;
+    // В произвольном режиме автоматической смены сторон в тай-брейке нет:
+    // стороны меняются по score_change (см. _handleClassicScore)
+    update.pending_classic_tiebreak_switch_done = customMode ? true : (nextPeriod !== tiebreakSet);
     update.pending_new_set = true;
     return { update, matchFinished: false };
   }
@@ -528,7 +588,8 @@ class ScoreboardService {
     }
 
     const currentPeriod = this._ensureNumber(data.current_period);
-    const maxPeriod = this._ensureNumber(data.period_count) || 5;
+    const maxPeriod = this._ensureNumber(data.period_count)
+      || (this._isCustomMode(data) ? CUSTOM_PERIOD_COUNT : 5);
     const newPeriod = currentPeriod + delta;
 
     if (newPeriod < 1 || newPeriod > maxPeriod) {
@@ -594,55 +655,105 @@ class ScoreboardService {
   }
 
   /**
-   * Обновить настройки
+   * Обновить настройки.
+   * Поддерживает invert_tablo/unlimited_score/two_wins_mode,
+   * а также произвольный вариант: custom_mode и его параметры
+   * (count_wins, score_wins, score_tie, balance, score_change, count_timeouts).
    */
   async updateSettings(gameId, settings) {
-    const allowedSettings = ['invert_tablo', 'unlimited_score', 'two_wins_mode'];
+    const booleanKeys = ['invert_tablo', 'unlimited_score', 'two_wins_mode', 'custom_mode', 'balance'];
+    const numberKeys = ['count_wins', 'score_wins', 'score_tie', 'score_change', 'count_timeouts'];
     const update = {};
 
-    for (const key of allowedSettings) {
+    for (const key of booleanKeys) {
       if (settings[key] !== undefined) {
         update[key] = !!settings[key];
       }
     }
 
-    if (settings.two_wins_mode === true) {
-      update.beach_mode = false;
-      update.two_wins_mode = true;
-      update.period_count = 3;
-    }
-    if (settings.two_wins_mode === false) {
-      update.two_wins_mode = false;
-      update.period_count = 5;
+    for (const key of numberKeys) {
+      if (settings[key] !== undefined) {
+        const parsed = parseInt(settings[key], 10);
+        if (isNaN(parsed)) {
+          throw new Error(`Invalid custom setting: ${key} must be an integer`);
+        }
+        // 0 допустим только для score_change (смена сторон отключена)
+        // и count_timeouts (таймауты запрещены)
+        const minValue = (key === 'score_change' || key === 'count_timeouts') ? 0 : 1;
+        if (parsed < minValue) {
+          throw new Error(`Invalid custom setting: ${key} must be >= ${minValue}`);
+        }
+        update[key] = parsed;
+      }
     }
 
+    // Взаимное исключение режимов (как в мобильном интерфейсе)
+    if (update.custom_mode === true) {
+      update.beach_mode = false;
+      update.two_wins_mode = false;
+    }
+    if (update.two_wins_mode === true) {
+      update.beach_mode = false;
+      update.custom_mode = false;
+    }
+
+    // matchmode и period_count вычисляет _normalizeModeUpdate (updateScoreboard)
     return this.updateScoreboard(gameId, update);
   }
 
   /**
-   * Переключить режим (пляжный/классический)
+   * Переключить режим (пляжный/классический/произвольный).
+   * Принимает beach_mode и/или custom_mode; при смене пляжного режима
+   * прогресс матча сбрасывается (как и раньше), при включении
+   * произвольного варианта — нет (сброс делает PATCH /settings клиента).
    */
-  async toggleMode(gameId, beachMode) {
+  async toggleMode(gameId, modes = {}) {
+    const data = await this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
+    if (!data) throw new Error('Scoreboard not found');
+
+    const base = this._modeFlagsFrom(data);
+    const beachChange = modes.beach_mode !== undefined && modes.beach_mode !== null;
+    const customChange = modes.custom_mode !== undefined && modes.custom_mode !== null;
+
+    let beach = base.beach;
+    let two = base.two;
+    let custom = base.custom;
+
+    if (beachChange) {
+      beach = !!modes.beach_mode;
+      two = false;
+      custom = false;
+    }
+    if (customChange) {
+      custom = !!modes.custom_mode;
+      if (custom) {
+        beach = false;
+        two = false;
+      }
+    }
+
     const update = {
-      beach_mode: !!beachMode,
-      beach_match_finished: false,
-      set_history: [],
-      classic_match_finished: false,
-      classic_tiebreak_switch_done: true,
+      beach_mode: beach,
+      two_wins_mode: two,
+      custom_mode: custom,
     };
 
-    if (beachMode) {
-      Object.assign(update, {
-        home_sets: 0, away_sets: 0, home_score: 0, away_score: 0,
-        beach_current_set: 1, current_period: 1, beach_switch_message: '',
-        period_count: 3, two_wins_mode: false,
-      });
-    } else {
-      Object.assign(update, {
-        beach_switch_message: '', home_sets: 0, away_sets: 0,
-        beach_current_set: 1, period_count: 5, home_score: 0, away_score: 0,
-        two_wins_mode: false,
-      });
+    if (beachChange) {
+      // Существующее поведение: смена пляжного режима сбрасывает прогресс
+      const progressReset = {
+        beach_match_finished: false,
+        set_history: [],
+        classic_match_finished: false,
+        classic_tiebreak_switch_done: true,
+        beach_switch_message: '',
+        beach_current_set: 1,
+        home_sets: 0,
+        away_sets: 0,
+        home_score: 0,
+        away_score: 0,
+      };
+      if (beach) progressReset.current_period = 1;
+      Object.assign(update, progressReset);
     }
 
     return this.updateScoreboard(gameId, update);
@@ -655,9 +766,10 @@ class ScoreboardService {
     const data = await this.db.getDoc(VOLLEYBALL_COLLECTION, gameId);
     if (!data) throw new Error('Scoreboard not found');
 
-    const beachEnabled = !!data.beach_mode;
-    const twoWinsMode = !!data.two_wins_mode;
-    const invertTablo = !!data.invert_tablo;
+    const flags = this._modeFlagsFrom(data);
+    const beachEnabled = flags.beach;
+    const twoWinsMode = flags.two;
+    const customEnabled = flags.custom;
 
     const resetData = {
       show: 1, timeout_active: false, prev_show: 1, home_score: 0, home_fouls: 0, away_score: 0, away_fouls: 0,
@@ -672,12 +784,23 @@ class ScoreboardService {
       home_timeouts: 0, away_timeouts: 0,
       beach_mode: beachEnabled, beach_current_set: 1, beach_switch_message: '',
       beach_match_finished: false,
-      period_count: beachEnabled ? 3 : (twoWinsMode ? 3 : 5),
+      period_count: beachEnabled ? 3
+        : (customEnabled ? CUSTOM_PERIOD_COUNT : (twoWinsMode ? 3 : 5)),
       set_history: [], classic_match_finished: false,
       home_side: 'left', away_side: 'right',
       classic_tiebreak_switch_done: true,
-      two_wins_mode: twoWinsMode, invert_tablo: invertTablo,
+      two_wins_mode: twoWinsMode, invert_tablo: flags.invert,
       unlimited_score: false,
+      // Произвольный вариант и его настройки (count_wins, score_change, ...)
+      // при сбросе сохраняются — меняется только прогресс матча
+      custom_mode: customEnabled,
+      matchmode: this._buildMatchmode({
+        beach: beachEnabled,
+        two: twoWinsMode,
+        invert: flags.invert,
+        unlimited: false,
+        custom: customEnabled,
+      }),
       lastEdited: this.db.serverTimestamp(),
     };
 
@@ -728,6 +851,125 @@ class ScoreboardService {
     return isNaN(parsed) ? 0 : parsed;
   }
 
+  /**
+   * Флаги режимов из документа. matchmode (5-битная маска:
+   * beach|two_wins|invert|unlimited|custom) — источник истины, как в
+   * мобильном клиенте; без него читаются отдельные поля.
+   */
+  _modeFlagsFrom(data) {
+    const mm = data && typeof data.matchmode === 'string' && data.matchmode.length === 5
+      ? data.matchmode : null;
+    if (mm) {
+      return {
+        beach: mm[0] === '1',
+        two: mm[1] === '1',
+        invert: mm[2] === '1',
+        unlimited: mm[3] === '1',
+        custom: mm[4] === '1',
+      };
+    }
+    return {
+      beach: !!(data && data.beach_mode),
+      two: !!(data && data.two_wins_mode),
+      invert: !!(data && data.invert_tablo),
+      unlimited: !!(data && data.unlimited_score),
+      custom: !!(data && data.custom_mode),
+    };
+  }
+
+  /** Произвольный (custom) вариант игры включён? */
+  _isCustomMode(data) {
+    return this._modeFlagsFrom(data).custom;
+  }
+
+  _buildMatchmode(flags) {
+    return (flags.beach ? '1' : '0')
+      + (flags.two ? '1' : '0')
+      + (flags.invert ? '1' : '0')
+      + (flags.unlimited ? '1' : '0')
+      + (flags.custom ? '1' : '0');
+  }
+
+  /**
+   * Настройки произвольного варианта из документа/запроса.
+   * Пустые значения заменяются на дефолты; 0 для score_change
+   * (смена сторон отключена) — валидное значение и сохраняется.
+   */
+  _customSettings(data) {
+    const pick = (value, fallback) => {
+      if (value === undefined || value === null || value === '') return fallback;
+      const parsed = parseInt(value, 10);
+      return isNaN(parsed) ? fallback : parsed;
+    };
+    const atLeastOne = (value, fallback) => Math.max(1, pick(value, fallback));
+
+    return {
+      count_wins: atLeastOne(data.count_wins, CUSTOM_DEFAULTS.count_wins),
+      score_wins: atLeastOne(data.score_wins, CUSTOM_DEFAULTS.score_wins),
+      score_tie: atLeastOne(data.score_tie, CUSTOM_DEFAULTS.score_tie),
+      balance: data.balance === undefined || data.balance === null
+        ? CUSTOM_DEFAULTS.balance : !!data.balance,
+      score_change: Math.max(0, pick(data.score_change, CUSTOM_DEFAULTS.score_change)),
+      count_timeouts: Math.max(0, pick(data.count_timeouts, CUSTOM_DEFAULTS.count_timeouts)),
+    };
+  }
+
+  /**
+   * Нормализация режимов при обновлении: пересчёт matchmode,
+   * взаимное исключение (custom ↔ beach ↔ two_wins) и period_count.
+   * Вызывается из updateScoreboard для любых точечных изменений.
+   */
+  _normalizeModeUpdate(existing, update) {
+    const has = (key) => update[key] !== undefined && update[key] !== null;
+    const structTouched = has('beach_mode') || has('two_wins_mode')
+      || has('custom_mode') || has('matchmode');
+    const modeTouched = structTouched || has('invert_tablo') || has('unlimited_score');
+    if (!modeTouched) return;
+
+    const base = this._modeFlagsFrom(existing);
+    let flags = {
+      beach: has('beach_mode') ? !!update.beach_mode : base.beach,
+      two: has('two_wins_mode') ? !!update.two_wins_mode : base.two,
+      invert: has('invert_tablo') ? !!update.invert_tablo : base.invert,
+      unlimited: has('unlimited_score') ? !!update.unlimited_score : base.unlimited,
+      custom: has('custom_mode') ? !!update.custom_mode : base.custom,
+    };
+
+    if (typeof update.matchmode === 'string' && update.matchmode.length === 5) {
+      flags = {
+        beach: update.matchmode[0] === '1',
+        two: update.matchmode[1] === '1',
+        invert: update.matchmode[2] === '1',
+        unlimited: update.matchmode[3] === '1',
+        custom: update.matchmode[4] === '1',
+      };
+    }
+
+    // Явно включённый режим выключает несовместимые (как в мобильном UI)
+    if (has('custom_mode') && update.custom_mode === true) {
+      flags.beach = false;
+      flags.two = false;
+    }
+    if (has('beach_mode') && update.beach_mode === true) {
+      flags.two = false;
+      flags.custom = false;
+    }
+    if (has('two_wins_mode') && update.two_wins_mode === true) {
+      flags.beach = false;
+      flags.custom = false;
+    }
+
+    update.beach_mode = flags.beach;
+    update.two_wins_mode = flags.two;
+    update.custom_mode = flags.custom;
+    update.matchmode = this._buildMatchmode(flags);
+
+    if (structTouched) {
+      update.period_count = flags.beach ? 3
+        : (flags.two ? 3 : (flags.custom ? CUSTOM_PERIOD_COUNT : 5));
+    }
+  }
+
   _getBeachSetNumber(data) {
     let setNumber = this._ensureNumber(data.beach_current_set);
     if (!setNumber) setNumber = this._ensureNumber(data.current_period);
@@ -760,6 +1002,19 @@ class ScoreboardService {
 
   _classicSetWon(teamScore, opponentScore, data) {
     const period = this._ensureNumber(data.current_period);
+
+    if (this._isCustomMode(data)) {
+      // Произвольный режим: цель и «баланс» задаются настройками.
+      // Решающий сет — тот, что равен числу побед в матче (count_wins).
+      const custom = this._customSettings(data);
+      const isTiebreak = period === custom.count_wins;
+      const target = isTiebreak ? custom.score_tie : custom.score_wins;
+      if (custom.balance) {
+        return teamScore >= target && (teamScore - opponentScore) >= 2;
+      }
+      return teamScore >= target;
+    }
+
     const twoWinsMode = !!data.two_wins_mode;
     let target;
 
@@ -822,10 +1077,14 @@ class ScoreboardService {
     if (team === 'home') homeFouls++;
     else awayFouls++;
 
+    const customMode = this._isCustomMode(data);
     const currentPeriod = this._ensureNumber(data.current_period) || 1;
-    const maxPeriod = this._ensureNumber(data.period_count) || 5;
+    const maxPeriod = this._ensureNumber(data.period_count)
+      || (customMode ? CUSTOM_PERIOD_COUNT : 5);
     const twoWinsMode = !!data.two_wins_mode;
-    const setsToWin = twoWinsMode ? CLASSIC_SETS_TO_WIN_TWO : CLASSIC_SETS_TO_WIN;
+    const setsToWin = customMode
+      ? this._customSettings(data).count_wins
+      : (twoWinsMode ? CLASSIC_SETS_TO_WIN_TWO : CLASSIC_SETS_TO_WIN);
     const matchFinished = homeFouls >= setsToWin || awayFouls >= setsToWin;
     const nextPeriod = currentPeriod < maxPeriod ? currentPeriod + 1 : currentPeriod;
     const homeFinal = team === 'home' ? teamScore : opponentScore;
@@ -845,7 +1104,10 @@ class ScoreboardService {
 
       update.pending_home_side = newHomeSide;
       update.pending_away_side = newHomeSide === 'left' ? 'right' : 'left';
-      update.pending_classic_tiebreak_switch_done = nextPeriod === tiebreakSet ? false : true;
+      // В произвольном режиме смена сторон идёт по score_change, а не по тай-брейку
+      update.pending_classic_tiebreak_switch_done = customMode
+        ? true
+        : (nextPeriod === tiebreakSet ? false : true);
       update.next_period = nextPeriod;
       update.pending_new_set = true;
     } else {

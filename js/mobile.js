@@ -78,6 +78,18 @@
     return isNaN(parsed) ? 0 : parsed;
   }
 
+  /**
+   * Разбор числовой настройки произвольного режима.
+   * В отличие от ensureNumber() сохраняет валидный 0
+   * (например, score_change = 0 — «смена сторон отключена»),
+   * а default возвращает только для пустого/невалидного значения.
+   */
+  function parseCustomNumber(value, defaultValue) {
+    if (value === null || value === undefined || value === '') return defaultValue;
+    var parsed = parseInt(value, 10);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+
   function generateUUID() {
     if (typeof uuid === 'function') return uuid();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -1292,13 +1304,13 @@
 
   function syncCustomSettings() {
     if (!_localCustomMode) return;
-    _localCustomSettings.count_wins = ensureNumber(document.getElementById('customSetsToWin').value) || 3;
-    _localCustomSettings.score_wins = ensureNumber(document.getElementById('customPointsToWin').value) || 25;
-    _localCustomSettings.score_tie = ensureNumber(document.getElementById('customTiebreakPoints').value) || 15;
+    _localCustomSettings.count_wins = parseCustomNumber(document.getElementById('customSetsToWin').value, 3);
+    _localCustomSettings.score_wins = parseCustomNumber(document.getElementById('customPointsToWin').value, 25);
+    _localCustomSettings.score_tie = parseCustomNumber(document.getElementById('customTiebreakPoints').value, 15);
     _localCustomSettings.balance = document.getElementById('customBalance').checked;
-    _localCustomSettings.score_change = ensureNumber(document.getElementById('customSideSwitchPoints').value) || 7;
-    var maxT = document.getElementById('customMaxTimeouts').value;
-    _localCustomSettings.count_timeouts = maxT === '' ? 2 : ensureNumber(maxT);
+    // 0 — валидное значение: смена сторон каждые N очков отключена
+    _localCustomSettings.score_change = Math.max(0, parseCustomNumber(document.getElementById('customSideSwitchPoints').value, 7));
+    _localCustomSettings.count_timeouts = Math.max(0, parseCustomNumber(document.getElementById('customMaxTimeouts').value, 2));
   }
 
   function getCustomPointsToWin() {

@@ -592,7 +592,13 @@ paths:
   /api/scoreboard/{game_id}/settings:
     patch:
       summary: Обновить настройки табло
-      description: Обновляет `invert_tablo`, `unlimited_score`, `two_wins_mode`
+      description: |
+        Обновляет `invert_tablo`, `unlimited_score`, `two_wins_mode`,
+        а также произвольный вариант игры: `custom_mode` и его параметры
+        (`count_wins`, `score_wins`, `score_tie`, `balance`, `score_change`,
+        `count_timeouts`). При включении `custom_mode` пляжный и «до двух побед»
+        режимы выключаются автоматически, `period_count` становится равным 9,
+        а `matchmode` пересчитывается.
       tags:
         - Scoreboard
       operationId: updateSettings
@@ -618,7 +624,13 @@ paths:
 
   /api/scoreboard/{game_id}/mode:
     post:
-      summary: Переключить режим (пляжный/классический)
+      summary: Переключить режим (пляжный/классический/произвольный)
+      description: |
+        Принимает `beach_mode` и/или `custom_mode` (хотя бы одно поле обязательно).
+        Включение `custom_mode` включает произвольный вариант игры
+        (`period_count` = 9, настройки сетов задаются через `/settings`);
+        прогресс матча при этом не сбрасывается. Смена `beach_mode`
+        сбрасывает прогресс матча — как и раньше.
       tags:
         - Scoreboard
       operationId: toggleMode
@@ -634,12 +646,16 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - beach_mode
+              anyOf:
+                - required: [beach_mode]
+                - required: [custom_mode]
               properties:
                 beach_mode:
                   type: boolean
                   description: true — пляжный волейбол, false — классический
+                custom_mode:
+                  type: boolean
+                  description: true — произвольный вариант игры (свои правила сетов)
       responses:
         '200':
           description: Обновлённое состояние табло
@@ -989,6 +1005,39 @@ components:
         invert_tablo:
           type: boolean
           example: false
+        custom_mode:
+          type: boolean
+          description: Произвольный вариант игры (свои правила сетов)
+          example: false
+        matchmode:
+          type: string
+          pattern: '^[01]{5}$'
+          description: 'Битовая маска режимов: beach | two_wins | invert | unlimited | custom'
+          example: '00000'
+        count_wins:
+          type: integer
+          description: Произвольный вариант — побед в матче (сетов)
+          example: 3
+        score_wins:
+          type: integer
+          description: Произвольный вариант — очков в сет
+          example: 25
+        score_tie:
+          type: integer
+          description: Произвольный вариант — очков в сете с номером count_wins
+          example: 15
+        balance:
+          type: boolean
+          description: Произвольный вариант — победа только с разницей 2 очка
+          example: false
+        score_change:
+          type: integer
+          description: Произвольный вариант — смена сторон каждые N очков, 0 — отключено
+          example: 7
+        count_timeouts:
+          type: integer
+          description: Произвольный вариант — таймаутов на команду за сет
+          example: 2
         show:
           type: integer
           example: 1
@@ -1071,6 +1120,49 @@ components:
         unlimited_score:
           type: boolean
           default: false
+        custom_mode:
+          type: boolean
+          default: false
+          description: |
+            Произвольный вариант игры: свои правила сетов.
+            Включает `period_count` = 9 и отключает `beach_mode`/`two_wins_mode`.
+            Альтернатива — 5-й бит поля `matchmode` (`...1`).
+        matchmode:
+          type: string
+          pattern: '^[01]{5}$'
+          description: |
+            Битовая маска режимов: beach | two_wins | invert | unlimited | custom.
+            Если не передана — вычисляется из отдельных полей режимов.
+          example: '00001'
+        count_wins:
+          type: integer
+          minimum: 1
+          default: 3
+          description: Произвольный вариант — побед в матче (сетов)
+        score_wins:
+          type: integer
+          minimum: 1
+          default: 25
+          description: Произвольный вариант — очков в сет
+        score_tie:
+          type: integer
+          minimum: 1
+          default: 15
+          description: Произвольный вариант — очков в сете с номером `count_wins`
+        balance:
+          type: boolean
+          default: false
+          description: Произвольный вариант — побеждать только с разницей 2 очка
+        score_change:
+          type: integer
+          minimum: 0
+          default: 7
+          description: Произвольный вариант — смена сторон каждые N очков, 0 — отключено
+        count_timeouts:
+          type: integer
+          minimum: 0
+          default: 2
+          description: Произвольный вариант — таймаутов на команду за сет
 
     ScoreboardUpdate:
       type: object
@@ -1081,7 +1173,13 @@ components:
         home_sets, away_sets, current_period, period_count, home_side, away_side,
         beach_mode, beach_current_set, beach_switch_message, beach_match_finished,
         classic_match_finished, classic_tiebreak_switch_done, two_wins_mode,
-        invert_tablo, unlimited_score, set_history, home_timeouts, away_timeouts
+        invert_tablo, unlimited_score, set_history, home_timeouts, away_timeouts,
+        custom_mode, matchmode, count_wins, score_wins, score_tie, balance,
+        score_change, count_timeouts
+
+        При обновлении полей режимов (`beach_mode`, `two_wins_mode`, `custom_mode`,
+        `matchmode`, `invert_tablo`, `unlimited_score`) автоматически пересчитываются
+        `matchmode`, взаимное исключение режимов и `period_count`.
 
         `home_score`/`away_score` доступны только для чтения: запись через PATCH
         отклоняется с `400`, очки принимаются через `POST /score`.
@@ -1164,6 +1262,29 @@ components:
           type: integer
         away_timeouts:
           type: integer
+        custom_mode:
+          type: boolean
+        matchmode:
+          type: string
+          pattern: '^[01]{5}$'
+        count_wins:
+          type: integer
+          minimum: 1
+        score_wins:
+          type: integer
+          minimum: 1
+        score_tie:
+          type: integer
+          minimum: 1
+        balance:
+          type: boolean
+        score_change:
+          type: integer
+          minimum: 0
+          description: Смена сторон каждые N очков, 0 — отключено
+        count_timeouts:
+          type: integer
+          minimum: 0
 
     TeamsUpdate:
       type: object
@@ -1194,6 +1315,34 @@ components:
         two_wins_mode:
           type: boolean
           description: Режим «две победы» (классический волейбол, 3 сета максимум)
+        custom_mode:
+          type: boolean
+          description: |
+            Произвольный вариант игры. true — включить (автоматически выключает
+            `beach_mode` и `two_wins_mode`, `period_count` = 9), false — выключить.
+        balance:
+          type: boolean
+          description: Произвольный вариант — победа только с разницей 2 очка
+        count_wins:
+          type: integer
+          minimum: 1
+          description: Произвольный вариант — побед в матче (сетов)
+        score_wins:
+          type: integer
+          minimum: 1
+          description: Произвольный вариант — очков в сет
+        score_tie:
+          type: integer
+          minimum: 1
+          description: Произвольный вариант — очков в сете с номером `count_wins`
+        score_change:
+          type: integer
+          minimum: 0
+          description: Произвольный вариант — смена сторон каждые N очков, 0 — отключено
+        count_timeouts:
+          type: integer
+          minimum: 0
+          description: Произвольный вариант — таймаутов на команду за сет
 
     # ---------- Matches ----------
 
