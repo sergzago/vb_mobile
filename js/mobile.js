@@ -78,6 +78,18 @@
     return isNaN(parsed) ? 0 : parsed;
   }
 
+  /**
+   * Разбор числовой настройки произвольного режима.
+   * В отличие от ensureNumber() сохраняет валидный 0
+   * (например, score_change = 0 — «смена сторон отключена»),
+   * а default возвращает только для пустого/невалидного значения.
+   */
+  function parseCustomNumber(value, defaultValue) {
+    if (value === null || value === undefined || value === '') return defaultValue;
+    var parsed = parseInt(value, 10);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+
   function generateUUID() {
     if (typeof uuid === 'function') return uuid();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -210,6 +222,16 @@
   // ===== AUTH =====
 
   /**
+   * Гостевой режим: авторизация отключена (ENABLE_AUTH=0 — работа без входа).
+   * Используется для выдачи прав, совпадающих с правами администратора,
+   * например удаления игр со вкладки «Игры».
+   * @returns {boolean}
+   */
+  function isGuestMode() {
+    return typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0;
+  }
+
+  /**
    * Права гостевого режима (ENABLE_AUTH=0 — работа без авторизации).
    * Без входа должны быть доступны создание/подключение игры и редактор
    * шаблонов. Вкладка «Админ» (управление пользователями) остаётся скрытой,
@@ -228,22 +250,28 @@
   }
 
   function initAuth() {
-    if (typeof ENABLE_AUTH !== 'undefined' && ENABLE_AUTH === 0) {
-      showApp();
-      document.getElementById('mobileUserInfo').textContent = 'Гость';
-      // Гостевой режим: игра и шаблоны доступны без входа
-      applyGuestPermissions();
+    if (isGuestMode()) {
+      // Гостевой режим: игра и шаблоны доступны без входа.
       // БД нужна и без авторизации: правила PocketBase для коллекций
       // volleyball/matches/templates допускают публичный доступ.
-      // Список шаблонов перечитываем после init — showApp() вызывается раньше,
-      // когда SDK ещё не загружен (и его вызов не срабатывает).
+      // ВАЖНО: сначала DB.init() (загрузка SDK), и только потом showApp()
+      // и загрузки списков — иначе DB.templates.list()/queryAll() вызываются
+      // до готовности SDK (ошибка "PocketBase SDK не загружен").
       DB.init().then(function() {
+        showApp();
+        document.getElementById('mobileUserInfo').textContent = 'Гость';
+        applyGuestPermissions();
         loadGamesList();
         if (typeof loadMobileTemplateSelect === 'function') {
           loadMobileTemplateSelect();
         }
       }).catch(function(err) {
+        // SDK/инициализация не удалась (напр. нет сети до CDN) — показываем
+        // приложение, чтобы был виден хотя бы интерфейс с ошибкой загрузки.
         console.error('[Mobile] Guest DB init failed:', err);
+        showApp();
+        document.getElementById('mobileUserInfo').textContent = 'Гость';
+        applyGuestPermissions();
       });
       return;
     }
@@ -363,17 +391,24 @@
 
   // Логирование в файл через серверный API (используется, когда БД недоступна)
   function logAuthToFile(data) {
-    // URL сервера: приоритет CREDENTIALS.server.url, иначе текущий origin
+    // База для API-сервера: приоритет CREDENTIALS.server.prefix — unique
+    // same-origin путь (напр. '/vb/api/'), при необходимости с абсолютным
+    // CREDENTIALS.server.url перед ним. Фоллбэк — корневой '/api/' (обратная
+    // совместимость со старым credentials.js без prefix).
     var serverBase = '';
     try {
-      if (typeof CREDENTIALS !== 'undefined' && CREDENTIALS.server && CREDENTIALS.server.url) {
-        serverBase = CREDENTIALS.server.url;
+      if (typeof CREDENTIALS !== 'undefined' && CREDENTIALS.server) {
+        if (CREDENTIALS.server.prefix) {
+          serverBase = (CREDENTIALS.server.url || '') + CREDENTIALS.server.prefix;
+        } else if (CREDENTIALS.server.url) {
+          serverBase = CREDENTIALS.server.url + '/api/';
+        }
       }
     } catch (e) {}
     if (!serverBase) {
-      serverBase = window.location.origin;
+      serverBase = '/api/';
     }
-    var serverUrl = serverBase.replace(/\/+$/, '') + '/api/auth/log';
+    var serverUrl = serverBase.replace(/\/+$/, '') + '/auth/log';
     try {
       return fetch(serverUrl, {
         method: 'POST',
@@ -603,6 +638,15 @@
 
   function loadGamesList() {
     var container = document.getElementById('gamesListContainer');
+    // Вызов до завершения DB.init() (гостевой режим вызывал showApp/loadGamesList
+    // раньше init): DB.scoreboard.queryAll() вернёт отклонённый промис —
+    // пропускаем ранний вызов, корректная загрузка придёт из DB.init().then().
+    if (!DB || typeof DB.isInitialized !== 'function' || !DB.isInitialized()) {
+      if (container) {
+        container.innerHTML = '<div class="loading"><div class="spinner"></div> Загрузка...</div>';
+      }
+      return;
+    }
     container.innerHTML = '<div class="loading"><div class="spinner"></div> Загрузка...</div>';
     _gamesListData = {};
 
@@ -655,7 +699,10 @@
 
           pendingGameSelect = gid;
           document.getElementById('mobileGameSelectInfo').innerHTML = info;
-          document.getElementById('mobileGameSelectDelete').style.display = _userRole === 'admin' ? '' : 'none';
+          // Кнопка «Удалить»: администратор всегда, гость — в гостевом режиме
+          // (ENABLE_AUTH=0 удаление разрешено публичными правилами БД).
+          document.getElementById('mobileGameSelectDelete').style.display =
+            (_userRole === 'admin' || isGuestMode()) ? '' : 'none';
           document.getElementById('mobileGameSelectModal').classList.remove('hidden');
         });
       });
@@ -869,7 +916,7 @@
   // ===== TEAMS UI =====
 
   function updateTeamsUI(data) {
-    document.getElementById('mobileTournament').value = data['tournament_name'] || 'НВЛ';
+    document.getElementById('mobileTournament').value = data['tournament_name'] || '-';
     document.getElementById('mobileVenue').value = data['venue'] || '';
     document.getElementById('mobileHomeTeam').value = data['home_team'] || '';
     document.getElementById('mobileAwayTeam').value = data['away_team'] || '';
@@ -879,7 +926,7 @@
     document.getElementById('mobileAwayColorHex').value = data['away_color'] || '#00ff00';
 
     if (typeof data['tournament_name'] === 'undefined') {
-      update_db({ tournament_name: 'НВЛ' });
+      update_db({ tournament_name: '-' });
     }
     if (typeof data['venue'] === 'undefined') {
       update_db({ venue: '' });
@@ -1177,7 +1224,7 @@
       date_time: DB.serverTimestamp(),
       home_team: mobileScoreboardData['home_team'],
       away_team: mobileScoreboardData['away_team'],
-      tournament_name: mobileScoreboardData['tournament_name'] || 'НВЛ',
+      tournament_name: mobileScoreboardData['tournament_name'] || '-',
       venue: mobileScoreboardData['venue'] || '',
       overall_score: overallHome + ':' + overallAway,
       sets_score: setHistory || mobileScoreboardData['set_history'] || [],
@@ -1257,13 +1304,13 @@
 
   function syncCustomSettings() {
     if (!_localCustomMode) return;
-    _localCustomSettings.count_wins = ensureNumber(document.getElementById('customSetsToWin').value) || 3;
-    _localCustomSettings.score_wins = ensureNumber(document.getElementById('customPointsToWin').value) || 25;
-    _localCustomSettings.score_tie = ensureNumber(document.getElementById('customTiebreakPoints').value) || 15;
+    _localCustomSettings.count_wins = parseCustomNumber(document.getElementById('customSetsToWin').value, 3);
+    _localCustomSettings.score_wins = parseCustomNumber(document.getElementById('customPointsToWin').value, 25);
+    _localCustomSettings.score_tie = parseCustomNumber(document.getElementById('customTiebreakPoints').value, 15);
     _localCustomSettings.balance = document.getElementById('customBalance').checked;
-    _localCustomSettings.score_change = ensureNumber(document.getElementById('customSideSwitchPoints').value) || 7;
-    var maxT = document.getElementById('customMaxTimeouts').value;
-    _localCustomSettings.count_timeouts = maxT === '' ? 2 : ensureNumber(maxT);
+    // 0 — валидное значение: смена сторон каждые N очков отключена
+    _localCustomSettings.score_change = Math.max(0, parseCustomNumber(document.getElementById('customSideSwitchPoints').value, 7));
+    _localCustomSettings.count_timeouts = Math.max(0, parseCustomNumber(document.getElementById('customMaxTimeouts').value, 2));
   }
 
   function getCustomPointsToWin() {
@@ -1759,7 +1806,7 @@
         away_color: document.getElementById('mobileAwayColor').value,
         home_team: document.getElementById('mobileHomeTeam').value,
         home_color: document.getElementById('mobileHomeColor').value,
-        tournament_name: document.getElementById('mobileTournament').value || 'НВЛ',
+        tournament_name: document.getElementById('mobileTournament').value || '-',
         venue: document.getElementById('mobileVenue').value || ''
       };
       if (!_recordExists) update.show = 1;
@@ -2163,9 +2210,19 @@
 
   // ===== TEMPLATE SELECT =====
 
-  // Загружаем список шаблонов и заполняем select
+  // Загружаем список шаблонов и заполняем select.
+  // Вызов до завершения DB.init() — штатная ситуация в гостевом режиме
+  // (showApp() зовёт раньше init): DB.templates.list() вернёт отклонённый
+  // промис "БД ещё не инициализирована", повторная загрузка произойдёт
+  // из DB.init().then() — здесь просто пропускаем лишний вызов.
   function loadMobileTemplateSelect() {
-    if (!DB || !DB.templates || typeof DB.templates.list !== 'function') {
+    // Ранний вызов до завершения DB.init() (гостевой режим вызывал
+    // showApp() до init): список корректно загрузится из DB.init().then() —
+    // здесь молча пропускаем, чтобы не засорять консоль Sync error.
+    if (!DB || typeof DB.isInitialized !== 'function' || !DB.isInitialized()) {
+      return;
+    }
+    if (!DB.templates || typeof DB.templates.list !== 'function') {
       console.warn('[Mobile] DB.templates not available, skipping template list load');
       return;
     }

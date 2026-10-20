@@ -56,6 +56,8 @@ async function getPbReaderClient() {
   if (!userEmail || !userPassword) return null;
 
   pbReaderClient = new PocketBase(pbUrl);
+  // D2: клиент общий для всех запросов — автоотмена недопустима
+  pbReaderClient.autoCancellation(false);
   try {
     await pbReaderClient.collection('app_users').authWithPassword(userEmail, userPassword);
   } catch {

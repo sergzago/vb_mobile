@@ -7,7 +7,7 @@
 1. Установите зависимости:
    ```bash
    cd server
-   npm install swagger-ui-express yamljs --save
+   npm install swagger-ui-express js-yaml --save
    ```
 
 2. Добавьте в `server/src/index.js` перед `module.exports = app`:
@@ -15,8 +15,9 @@
    // Swagger UI (только для разработки)
    if (process.env.NODE_ENV !== 'production') {
      const swaggerUi = require('swagger-ui-express');
-     const YAML = require('yamljs');
-     const swaggerDocument = YAML.load('./swagger.yaml');
+     const yaml = require('js-yaml');
+     const fs = require('fs');
+     const swaggerDocument = yaml.load(fs.readFileSync('./swagger.yaml', 'utf8'));
      app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
      console.log(`📖 Swagger UI: http://localhost:${PORT}/api-docs`);
    }

@@ -23,11 +23,8 @@ services:
       # pb_schema.json и init-скрипт — всё это запекается (server/Dockerfile).
       context: .
       dockerfile: server/Dockerfile
-      # Порт PocketBase подставляется в js/db-config.js на этапе сборки образа,
-      # чтобы фоллбэк в браузере (credentials.js → server.url) соответствовал
-      # тому, что сервер ожидает в docker-сети и на хосте.
-      args:
-        POCKETBASE_PORT: ${POCKETBASE_PORT:-8090}
+      # build-arg НЕ пробрасываем: внутренний адрес PB — всегда pocketbase:8090
+      # (см. server/Dockerfile), хостовой POCKETBASE_PORT сюда подставлять нельзя.
     # Точное имя образа — как у `docker save/load` (см. DOCKER_DEPLOY.md).
     # Без него compose подставит <имя-каталога>-server, не найдёт образ на
     # сервере и попытается собрать его из неполного контекста.
@@ -59,8 +56,9 @@ services:
       # --- Подключение к базе данных (PocketBase) ---
       # По умолчанию БД — ВНУТРИ стека: сервис pocketbase из
       # docker-compose.pb.yml, адрес в docker-сети http://pocketbase:8090.
-      # Наружу БД не публикуется (см. docker-compose.pb.yml: только 127.0.0.1).
-      # Исключение — внешняя/хостовая БД: задайте адрес в .env и верните
+      # Наружу БД публикуется на 0.0.0.0 — внешний доступ задуман
+      # (см. docker-compose.pb.yml).
+      # Исключение — внешняя/хостовая БД вне стека: задайте адрес в .env и верните
       # extra_hosts (см. ниже):
       #   POCKETBASE_URL=http://host.docker.internal:8090  (PB на этом же хосте)
       #   POCKETBASE_URL=http://192.168.1.10:8090          (PB в локальной сети)
@@ -82,15 +80,13 @@ services:
       retries: 5
 
   frontend:
-    # Статика (html/css/js) и nginx.conf запечены в образ — на сервере не нужны
+    # Статика (html/css/js) и шаблон nginx запечены в образ — на сервере не нужны
     # ни репозиторий, ни bind-mount'ы.
     build:
       context: .
       dockerfile: Dockerfile.frontend
-      # Порт PocketBase подставляется в отдаваемый браузеру js/db-config.js
-      # (фоллбэк подключения; основной путь — прокси /pb/).
-      args:
-        POCKETBASE_PORT: ${POCKETBASE_PORT:-8090}
+      # build-arg НЕ пробрасываем: порт внутри сети всегда 8090 (см. Dockerfile.frontend),
+      # хостовой POCKETBASE_PORT сюда подставлять нельзя (внутри сети на нём ничего нет).
     image: vb_mobile-frontend:latest
     container_name: volleyball_frontend
     restart: unless-stopped
@@ -98,9 +94,15 @@ services:
       - "${FRONTEND_PORT:-8080}:80"
     # (Опционально) правка конфига/статики без пересборки — замените `[]` на:
     #   volumes:
-    #     - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    #     - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
     #     - ./:/usr/share/nginx/html:ro
     volumes: []
+    environment:
+      # Уникальный префикс same-origin путей (nginx → pocketbase / server).
+      # Рендерится в конфиг nginx через envsubst при старте контейнера.
+      # ВАЖНО: должен совпадать с APP_PREFIX в credentials.js (браузер);
+      # браузер получает значение из /vb-config.js (см. nginx.conf.template).
+      - APP_PREFIX=${APP_PREFIX:-/vb/}
     depends_on:
       - server
 

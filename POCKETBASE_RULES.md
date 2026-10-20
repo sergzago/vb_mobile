@@ -108,7 +108,7 @@ init-скриптом в зависимости от режима авториз
 
 ## Как настроить
 
-1. Откройте **PocketBase Admin UI** (`https://zago.my.to/pb/_/`)
+1. Откройте **PocketBase Admin UI** (`https://zago.my.to/vb/pb/_/`)
 2. Перейдите в **Settings → Collections**
 3. Для каждой коллекции установите правила из таблицы выше
 4. Сохраните
@@ -134,7 +134,9 @@ init-скриптом в зависимости от режима авториз
 
 ```js
 pocketbase: {
-  url: '/pb/',                          // same-origin; nginx фронтенда проксирует /pb/ → pocketbase:8090
+  // APP_PREFIX + 'pb/' (по умолчанию '/vb/pb/'): same-origin;
+  // nginx фронтенда проксирует <APP_PREFIX>pb/ → pocketbase:8090
+  url: '/vb/pb/',
   user_email: 'app@volleyball.local',   // Технический пользователь
   user_password: '...'
 }

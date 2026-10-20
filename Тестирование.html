@@ -1,0 +1,390 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><title></title><style>body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;line-height:1.5}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;vertical-align:top}th{background:#f2f2f2}code{background:#f4f4f4;padding:1px 4px;border-radius:3px}h1{font-size:1.6rem}h2{font-size:1.35rem}h3{font-size:1.15rem}h4{font-size:1rem}</style></head><body>
+<h1>Отчёт о тестировании API Volleyball Scoreboard</h1>
+<p><strong>Дата:</strong> 01.10.2026</p>
+<p><strong>Среда:</strong> frontend <code>http://localhost:8081</code> (nginx), API <code>http://localhost:3001</code> (Express, docker <code>volleyball_server</code>), PocketBase <code>http://localhost:8091</code> (docker <code>volleyball_pb</code>)</p>
+<p><strong>Режим авторизации:</strong> гостевой (<code>ENABLE_AUTH=0</code>) — эндпоинты доступны без токена</p>
+<p><strong>Инструмент:</strong> автотест <code>/tmp/vb_api_test.py</code> (Python 3.14 + <code>requests</code>), результаты — <code>/tmp/vb_api_test_results.json</code></p>
+<p><strong>Итог после исправлений: 130 проверок, PASS = 130, FAIL = 0</strong> ✅</p>
+<p><strong>Первый прогон (до правок): 99 проверок, PASS = 98, FAIL = 1</strong> — единственный FAIL был намеренной репродукцией дефекта R4. Дефекты D1–D4 исправлены, D5 задокументирован в <code>swagger.yaml</code>; повторный прогон — 130/130 PASS.</p>
+<hr />
+<h2>1. План тестирования</h2>
+<table>
+<thead>
+<tr>
+<th>№</th>
+<th>Группа</th>
+<th>Объём проверок</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Smoke / окружение</td>
+<td>health API, фронтенда и PB; nginx-прокси <code>/vb/api/</code>; Swagger; гостевой режим; 404</td>
+</tr>
+<tr>
+<td>1</td>
+<td><strong>Полная игра из 3 партий</strong> (classic, «до двух побед»)</td>
+<td>создание игры → партия 1 (25:23) → <code>new-set</code> → партия 2 (20:25) → <code>new-set</code> → тай-брейк (15:13) → окончание матча; проверка счёта по сетам, флагов, истории, записи матча, блокировки счёта после финиша, доступа через прокси</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>Репродукция «счёт по партиям не переключился»</strong></td>
+<td>R1 — запись счёта через <code>PATCH</code> в обход <code>/score</code>; R2 — режим <code>unlimited_score</code> + <code>new-set</code>; R3 — откат «-1» после победы в сете; R4 — параллельные запросы</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Валидация и краевые случаи</td>
+<td>400/404/409 по валидаторам, границы периода, некорректные типы, счёт в 0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Очистка</td>
+<td>удаление тестовых игр и матчей из PocketBase, контроль остатка</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ключевая особенность реализации (<code>server/src/services/scoreboardService.js</code>):</strong> в классическом режиме счёт по сетам хранится в полях <code>home_fouls</code> / <code>away_fouls</code> (поля <code>home_sets</code>/<code>away_sets</code> ведутся только в пляжном режиме). Сет засчитывается при наборе очков через <code>POST /score</code> (<code>_classicSetWon</code> → <code>_applyClassicSetWin</code>), а также по текущему счёту при переключении партии (<code>POST /new-set</code> и <code>POST /period</code>). После серии исправлений: <code>PATCH</code> не принимает <code>home_score</code>/<code>away_score</code> (400), <code>-1</code> при <code>pending_new_set</code> откатывает засчитанную партию, <code>+1</code> при <code>pending_new_set</code> игнорируется, а операции чтения-записи по одной игре сериализованы (in-process lock) — поведение и API согласованы с фронтендом (<code>js/mobile.js</code>).</p>
+<hr />
+<h2>2. Результаты по группам</h2>
+<h3>Группа 0 — Smoke: 9/9 PASS</h3>
+<table>
+<thead>
+<tr>
+<th>Проверка</th>
+<th>Результат</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/health</code> (3001)</td>
+<td>200, <code>provider=pocketbase</code></td>
+</tr>
+<tr>
+<td>Frontend (8081) и <code>GET /vb/api/health</code> через nginx</td>
+<td>200 → прокси корректно пробрасывает на API</td>
+</tr>
+<tr>
+<td>PocketBase <code>/api/health</code> (8091)</td>
+<td>200</td>
+</tr>
+<tr>
+<td>Swagger UI <code>/api-docs/</code></td>
+<td>200</td>
+</tr>
+<tr>
+<td><code>GET /api/auth/me</code> без токена</td>
+<td>200 (гостевой режим работает)</td>
+</tr>
+<tr>
+<td><code>GET /api/scoreboard/&lt;несуществующая&gt;</code></td>
+<td>404</td>
+</tr>
+</tbody>
+</table>
+<h3>Группа 1 — Полная игра из 3 партий: 41/41 PASS ✅</h3>
+<p>Сценарий: <code>two_wins_mode=true</code> (матч до 2 побед, максимум 3 партии), ход игры <strong>25:23 → 20:25 → 15:13 (тай-брейк)</strong>, итог <strong>2:1</strong>.</p>
+<p><strong>Главный вопрос — «меняется ли счёт по сетам при окончании игры»: ДА, меняется.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Этап</th>
+<th>Счёт по сетам (<code>home_fouls:away_fouls</code>)</th>
+<th>Проверено</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Начало</td>
+<td>0:0</td>
+<td>✅ <code>current_period=1</code>, <code>period_count=3</code></td>
+</tr>
+<tr>
+<td>До последнего очка партии 1</td>
+<td>0:0 (не спотыкается раньше времени)</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>После партии 1 (25:23)</td>
+<td><strong>1:0</strong></td>
+<td>✅ <code>pending_new_set=true</code>, период не сдвинут, <code>set_history=[{25,23}]</code></td>
+</tr>
+<tr>
+<td>После <code>new-set</code></td>
+<td>1:0 (сохраняется)</td>
+<td>✅ очки 0:0, период=2, смена сторон <code>home_side=right</code></td>
+</tr>
+<tr>
+<td>После партии 2 (20:25)</td>
+<td><strong>1:1</strong></td>
+<td>✅ <code>set_history</code> = 2 записи</td>
+</tr>
+<tr>
+<td>До последнего очка тай-брейка</td>
+<td>1:1</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>После финального очка (15:13)</strong></td>
+<td><strong>2:1 — счёт по сетам изменился при окончании игры</strong></td>
+<td>✅ <code>classic_match_finished=true</code></td>
+</tr>
+<tr>
+<td>Запись в <code>/api/matches</code></td>
+<td><code>overall_score="2:1"</code>, <code>sets_score</code> = 3 партии, <code>game_type=classic</code></td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>POST /score</code> после финиша</td>
+<td>200 с <code>message="Match finished"</code>, счёт не меняется</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Состояние через прокси фронта <code>/vb/api/scoreboard/...</code></td>
+<td>200, счёт сетов 2:1</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<p>Дополнительно: <code>set_history</code> содержит все 3 партии; финальный счёт тай-брейка 15:13 сохранён для отображения; <code>home_sets</code>=0 (в classic счёт по сетам — в <code>home_fouls</code>); после финала <code>pending_new_set</code> не устанавливается.</p>
+<h3>Группа 1b — Пляжный режим: 17/17 PASS ✅</h3>
+<p>Сценарий: <code>beach_mode=true</code> (<code>BEACH_SETS_TO_WIN=2</code>, <code>BEACH_MAX_SETS=3</code>), партии <strong>21:18 → 19:21 → 15:13</strong>, итог <strong>2:1</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Этап</th>
+<th>Проверено</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Создание игры</td>
+<td><code>beach_mode=true</code>, <code>beach_current_set=1</code>, <code>period_count=3</code>, сеты 0:0</td>
+</tr>
+<tr>
+<td>Партия 1 (21:18)</td>
+<td>счёт сетов <strong>1:0</strong> в <code>home_sets</code>/<code>away_sets</code>, <code>pending_new_set=true</code>, <code>next_beach_set=2</code>, <code>set_history</code> = 1 запись</td>
+</tr>
+<tr>
+<td><code>+1</code> при <code>pending_new_set</code></td>
+<td>игнорируется (200, счёт 21:18 не меняется)</td>
+</tr>
+<tr>
+<td><code>new-set</code></td>
+<td><code>beach_current_set=2</code>, очки 0:0, сеты 1:0 сохранены</td>
+</tr>
+<tr>
+<td>Партия 2 (19:21)</td>
+<td>счёт сетов <strong>1:1</strong></td>
+</tr>
+<tr>
+<td>Откат <code>-1</code> (D1 в пляже)</td>
+<td>сеты <strong>1:0</strong>, очки 19:20, <code>set_history</code> снова 1 запись</td>
+</tr>
+<tr>
+<td>Повторный <code>+1</code></td>
+<td>партия засчитана ровно один раз → 1:1</td>
+</tr>
+<tr>
+<td><code>new-set</code></td>
+<td><code>beach_current_set=3</code> (тай-брейк до 15)</td>
+</tr>
+<tr>
+<td>Партия 3 (15:13)</td>
+<td>счёт сетов <strong>2:1</strong>, <code>beach_match_finished=true</code></td>
+</tr>
+<tr>
+<td><code>/api/matches</code></td>
+<td><code>game_type=beach</code>, <code>overall_score="2:1"</code></td>
+</tr>
+</tbody>
+</table>
+<h3>Группа 2 — Репродукция «счёт по партиям не переключился»: 33/33 PASS (все дефекты исправлены)</h3>
+<h4>R1. Запись счёта в обход <code>POST /score</code> (через <code>PATCH</code>) — ИСПРАВЛЕНО (ранее REPRODUCED)</h4>
+<ul>
+<li><code>PATCH {home_score:25, away_score:23}</code> теперь → <strong>400</strong> (<code>home_score/away_score нельзя менять через PATCH: очки принимаются только через POST /api/scoreboard/{game_id}/score</code>); счёт остаётся 0:0. <code>PATCH</code> с одним <code>away_score</code> — тоже 400.</li>
+<li><code>PATCH</code> остальных разрешённых полей (<code>tournament_name</code>, команды, цвета, <code>period_count</code>, флаги) — по-прежнему 200 и применяется.</li>
+<li>Обход детекции закрыт; штатный путь через <code>/score</code> засчитывает партию как раньше (1:0, <code>pending_new_set=true</code>).</li>
+<li><strong>Изменение:</strong> <code>routes/scoreboard.js</code> — ранний ответ 400 при наличии <code>home_score</code>/<code>away_score</code> в теле <code>PATCH</code>; эти поля убраны из <code>allowedFields</code>. Проверки R1.0–R1.7 — PASS, V3.3b — PASS.</li>
+</ul>
+<h4>R2. Режим <code>unlimited_score</code> + <code>POST /new-set</code> — ИСПРАВЛЕНО (ранее REPRODUCED)</h4>
+<ul>
+<li>При <code>unlimited_score=true</code> автоопределение победы в сете по-прежнему отключено (25:23 → сеты 0:0) — ожидаемое поведение режима.</li>
+<li><code>POST /new-set</code> теперь <strong>засчитывает партию по текущему счёту</strong>: после 25:23 → сеты <strong>1:0</strong>, <code>set_history=[{25,23}]</code>, период=2, очки 0:0, применена смена сторон (<code>home_side=right</code>).</li>
+<li>Вторая партия (25:20) + <code>new-set</code> → сеты <strong>2:0</strong>, <code>classic_match_finished=true</code>, результат <code>"2:0"</code> сохранён в <code>/api/matches</code>. <code>new-set</code> и <code>period</code> теперь эквивалентны.</li>
+<li><strong>Изменение:</strong> <code>newSet()</code> разделён на <code>_newSetLocked</code> (проверка и запуск) и <code>_applyNewSet</code> (смена сета), логика засчитывания — <code>_setWonByCurrentScore</code>/<code>_countCurrentSet</code> (аналог <code>updatePeriod</code>). Проверки R2.0–R2.11 — PASS.</li>
+</ul>
+<h4>R3. Откат «-1» после победы в сете → двойное засчитывание — ИСПРАВЛЕНО (ранее REPRODUCED, самый серьёзный дефект)</h4>
+<ol>
+<li>Партия выиграна 25:23 → сеты <strong>1:0</strong>, <code>pending_new_set=true</code>.</li>
+<li><code>POST /score delta:-1</code> → очки откатываются до 24:23 <strong>и</strong> счёт по сетам возвращается к <strong>0:0</strong>, <code>set_history</code> очищается, <code>pending_new_set</code>/<code>next_period</code>/pending-стороны сбрасываются (порт revert-логики <code>js/mobile.js</code>).</li>
+<li>Повторный <code>+1</code> (снова 25:23) засчитывает партию <strong>ровно один раз</strong> → 1:0, <code>classic_match_finished=false</code>.</li>
+<li>В <code>/api/matches</code> ложной записи <code>"2:0"</code> нет.</li>
+</ol>
+<ul>
+<li><strong>Изменение:</strong> <code>_buildSetRevertUpdate(data, team)</code> и ветка отката в <code>_updateScoreLocked</code>; guard-ы <code>!data.pending_new_set</code> в <code>_handleClassicScore</code>/<code>_handleBeachScore</code>. Проверки R3.0–R3.9 — PASS, в пляжном режиме — B1.10–B1.12.</li>
+</ul>
+<h4>R4. Параллельные запросы — ИСПРАВЛЕНО (ранее REPRODUCED, единственный FAIL первого прогона)</h4>
+<ul>
+<li>8 одновременных <code>POST /score</code> (5 × home, 3 × away) → <code>home_score=5</code>, <code>away_score=3</code>, <strong>ошибок нет</strong> (до правок: 2 очка из 5 и четыре HTTP 500 с <code>autocancelled</code>).</li>
+<li>2 одновременных <code>+1</code> при счёте 24:23 → партия засчитана <strong>один раз</strong> (1:0), счёт 25:23 — без двойного засчёта и без «лишнего» очка.</li>
+<li>Отдельно: <code>+1</code> при <code>pending_new_set</code> игнорируется (200, счёт не меняется) — на фронтенде кнопки счёта в этот момент заблокированы (<code>js/mobile.js:1024</code>), а API устойчив к повторным/параллельным запросам.</li>
+<li><strong>Изменение:</strong> <code>client.autoCancellation(false)</code> при создании PocketBase-клиента (<code>config/db.js</code>, <code>routes/auth.js</code>) и сериализация read-modify-write по <code>game_id</code> (<code>_gameLocks</code>/<code>_withGameLock</code>, применена к <code>updateScore</code>, <code>newSet</code>, <code>updatePeriod</code>). Проверки R4.0–R4.5 — PASS.</li>
+</ul>
+<h3>Группа 3 — Валидация и краевые случаи: 17/17 PASS ✅</h3>
+<table>
+<thead>
+<tr>
+<th>Проверка</th>
+<th>Код</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Создание без <code>game_id</code></td>
+<td>400</td>
+</tr>
+<tr>
+<td>Дубликат <code>game_id</code></td>
+<td>409</td>
+</tr>
+<tr>
+<td><code>PATCH</code> несуществующей игры</td>
+<td>404</td>
+</tr>
+<tr>
+<td><code>PATCH</code> с <code>home_score</code> (новая проверка D3)</td>
+<td>400</td>
+</tr>
+<tr>
+<td><code>delta=2</code>, <code>team="middle"</code>, <code>beach_mode</code> не boolean, <code>show=3</code>, отсутствие <code>team</code></td>
+<td>400</td>
+</tr>
+<tr>
+<td><code>delta=-1</code> при счёте 0:0 (<code>Score cannot be negative</code>)</td>
+<td>400</td>
+</tr>
+<tr>
+<td><code>period -1</code> на 1-м периоде, <code>period +1</code> за <code>period_count=3</code> (<code>Period must be between 1 and 3</code>)</td>
+<td>400</td>
+</tr>
+<tr>
+<td><code>POST /api/matches</code> без <code>game_id</code>; <code>GET /api/matches/&lt;несуществующий&gt;</code></td>
+<td>400 / 404</td>
+</tr>
+<tr>
+<td><code>new-set</code> на существующей игре</td>
+<td>200</td>
+</tr>
+</tbody>
+</table>
+<h3>Группа 4 — Очистка: 10/10 PASS ✅</h3>
+<p>Удалено 8 тестовых табло (<code>qa_full3</code>, <code>qa_beach</code>, <code>qa_noswitch</code>, <code>qa_unlimited</code>, <code>qa_rollback</code>, <code>qa_race</code>, <code>qa_valid</code>, <code>tprobe1</code>) и 2 записи матчей (через PocketBase API от имени <code>app_users</code>), контрольный запрос <code>id~"qa_"</code> → 0 записей. Скрипт прогонялся многократно (после каждой правки), остатков данных нет; продуктовые данные не затрагивались.</p>
+<hr />
+<h2>3. Сводка дефектов и статус исправления</h2>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Серьёзность</th>
+<th>Описание (первый прогон)</th>
+<th>Сценарий</th>
+<th>Статус</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>D1</strong></td>
+<td>Высокая</td>
+<td>Откат <code>-1</code> после победы в сете не возвращал счёт по сетам; повторный <code>+1</code> давал двойное засчитывание → ложный финиш 2:0 и неверная запись в истории</td>
+<td>R3, B1</td>
+<td><strong>Исправлен</strong> — <code>_buildSetRevertUpdate()</code> + ветка отката в <code>_updateScoreLocked</code>, guard-ы <code>pending_new_set</code></td>
+</tr>
+<tr>
+<td><strong>D2</strong></td>
+<td>Высокая</td>
+<td>Параллельные <code>POST /score</code>: потерянные очки + HTTP 500 из-за автокэнсела PocketBase SDK (в <code>db.js</code> не отключён <code>autoCancellation</code>) и гонки read-modify-write</td>
+<td>R4</td>
+<td><strong>Исправлен</strong> — <code>autoCancellation(false)</code> в <code>config/db.js</code>/<code>routes/auth.js</code> + in-process lock по <code>game_id</code></td>
+</tr>
+<tr>
+<td><strong>D3</strong></td>
+<td>Средняя</td>
+<td>Счёт, выставленный через <code>PATCH</code> (в обход <code>/score</code>), не детектировался как победа в сете → счёт по сетам не переключался, матч не завершался</td>
+<td>R1</td>
+<td><strong>Исправлен</strong> — <code>PATCH</code> с <code>home_score</code>/<code>away_score</code> → 400 (поля убраны из <code>allowedFields</code>)</td>
+</tr>
+<tr>
+<td><strong>D4</strong></td>
+<td>Средняя</td>
+<td><code>POST /new-set</code> никогда не засчитывал выигранную партию (в т.ч. при <code>unlimited_score</code>), а <code>POST /period</code> засчитывал — неэквивалентное поведение</td>
+<td>R2</td>
+<td><strong>Исправлен</strong> — <code>_setWonByCurrentScore()</code>/<code>_countCurrentSet()</code> в <code>newSet()</code></td>
+</tr>
+<tr>
+<td><strong>D5</strong></td>
+<td>Информ.</td>
+<td>Счёт по сетам в классическом режиме хранится в <code>home_fouls</code>/<code>away_fouls</code> (семантика «фолы»), <code>home_sets</code> всегда 0 — источник путаницы при чтении API напрямую</td>
+<td>Группа 1</td>
+<td><strong>Задокументирован</strong> — описания полей и поведения в <code>swagger.yaml</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ответ на основной вопрос:</strong> в штатном сценарии (набор очков через <code>POST /score</code>) счёт по сетам <strong>корректно меняется при окончании каждой партии и при окончании игры</strong> (1:1 → 2:1, <code>classic_match_finished=true</code>, матч сохранён с <code>overall_score="2:1"</code>). Ранее «счёт по партиям не переключался» в четырёх ситуациях: (a) запись счёта в обход <code>/score</code>, (b) переключение партии через <code>new-set</code> при <code>unlimited_score</code>, (c) откат очков <code>-1</code> после победы в сете, (d) параллельные запросы. <strong>Все четыре причины устранены</strong> — повторный прогон: 130/130 PASS (группа 1 — 41/41, группа 1b — 17/17, группа 2 — 33/33, валидация — 17/17, очистка — 10/10).</p>
+<h2>4. Внесённые изменения (по рекомендациям первого прогона)</h2>
+<p>Все пять рекомендаций реализованы:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Файл</th>
+<th>Что сделано</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1</td>
+<td><code>server/src/services/scoreboardService.js</code></td>
+<td><code>_buildSetRevertUpdate(data, team)</code> + ветка отката в <code>_updateScoreLocked</code> при <code>delta &lt; 0</code> и <code>pending_new_set=true</code>: возврат <code>home_fouls</code>/<code>away_fouls</code> (или <code>home_sets</code>/<code>away_sets</code> в пляже), снятие последней записи <code>set_history</code>, сброс <code>next_period</code>/<code>next_beach_set</code>, pending-сторон, флагов финиша и таймаутов; guard-ы <code>!data.pending_new_set</code> в <code>_handleClassicScore</code>/<code>_handleBeachScore</code></td>
+</tr>
+<tr>
+<td>D2</td>
+<td><code>server/src/config/db.js</code>, <code>server/src/routes/auth.js</code></td>
+<td><code>client.autoCancellation(false)</code> для общих PocketBase-клиентов (устранён HTTP 500 <code>autocancelled</code>)</td>
+</tr>
+<tr>
+<td>D2</td>
+<td><code>server/src/services/scoreboardService.js</code></td>
+<td>Сериализация read-modify-write по <code>game_id</code>: <code>_gameLocks</code> + <code>_withGameLock()</code>; применена к <code>updateScore</code>, <code>newSet</code>, <code>updatePeriod</code></td>
+</tr>
+<tr>
+<td>D3</td>
+<td><code>server/src/routes/scoreboard.js</code></td>
+<td><code>PATCH</code> с <code>home_score</code>/<code>away_score</code> → 400; поля исключены из <code>allowedFields</code></td>
+</tr>
+<tr>
+<td>D4</td>
+<td><code>server/src/services/scoreboardService.js</code></td>
+<td><code>newSet()</code> → <code>_newSetLocked</code> + <code>_applyNewSet</code>; засчитывание партии по текущему счёту (<code>_setWonByCurrentScore</code>, <code>_countCurrentSet</code>) и сохранение матча при решающей партии</td>
+</tr>
+<tr>
+<td>—</td>
+<td><code>server/src/services/scoreboardService.js</code></td>
+<td><code>+1</code> при <code>pending_new_set=true</code> игнорируется (согласовано с блокировкой кнопок счёта во фронтенде, устойчивость к повторным запросам)</td>
+</tr>
+<tr>
+<td>D5</td>
+<td><code>server/swagger.yaml</code></td>
+<td>Описания <code>home_fouls</code>/<code>away_fouls</code>/<code>home_sets</code>/<code>away_sets</code>; <code>readOnly</code> для <code>home_score</code>/<code>away_score</code>; поведение <code>PATCH</code> (400), <code>POST /score</code> (откат <code>-1</code>, игнорирование при <code>pending_new_set</code>) и <code>POST /new-set</code> (засчитывание партии)</td>
+</tr>
+</tbody>
+</table>
+<p>Развёртывание: изменения входят в образ <code>vb_mobile-server</code> — после правок образ пересобран (<code>docker compose build server</code>) и контейнер перезапущен (<code>docker compose up -d server</code>).</p>
+<hr />
+<h2>Приложение</h2>
+<ul>
+<li>Скрипт: <code>/tmp/vb_api_test.py</code> (запуск: <code>python3 /tmp/vb_api_test.py</code>), машиночитаемые результаты: <code>/tmp/vb_api_test_results.json</code>.</li>
+<li>Логи прогонов: до правок — <code>/tmp/vb_test_out.txt</code> (99 проверок, 1 FAIL), после правок — <code>/tmp/vb_test_out3.txt</code> (112/112), финальный с расширенным пляжным блоком — <code>/tmp/vb_test_out4.txt</code> и контрольный повторный прогон — <code>/tmp/vb_test_out_final.txt</code> (оба 130/130 PASS).</li>
+<li>Тестовые данные (game_id <code>qa_*</code>, <code>tprobe1</code>) удалены из PocketBase на шаге 4.</li>
+</ul>
+</body></html>

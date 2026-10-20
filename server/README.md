@@ -64,8 +64,8 @@ npm start
 | `POST` | `/api/scoreboard/:game_id/display` | Настроить отображение |
 | `POST` | `/api/scoreboard/:game_id/label` | Обновить метку |
 | `PUT` | `/api/scoreboard/:game_id/teams` | Обновить команды |
-| `PATCH` | `/api/scoreboard/:game_id/settings` | Обновить настройки |
-| `POST` | `/api/scoreboard/:game_id/mode` | Переключить режим |
+| `PATCH` | `/api/scoreboard/:game_id/settings` | Обновить настройки (в т.ч. произвольного варианта) |
+| `POST` | `/api/scoreboard/:game_id/mode` | Переключить режим (пляжный/классический/произвольный) |
 | `POST` | `/api/scoreboard/:game_id/reset` | Сбросить табло |
 
 ### Matches
@@ -259,6 +259,33 @@ curl "http://localhost:3000/api/matches?tournament=НВЛ&game_type=classic&limi
 - Сеты 1-4 — до 25 очков
 - 5-й сет (тай-брейк) — до 15 очков
 - Смена сторон в 5-м сете при 8 очках
+
+### Произвольный вариант (`custom_mode: true`)
+- Свои правила: `count_wins` (побед в матче, по умолчанию 3),
+  `score_wins` (очков в сет, 25), `score_tie` (очков в сете с номером
+  `count_wins`, 15), `balance` (победа только с разницей 2 очка, false),
+  `score_change` (смена сторон каждые N очков, **0 — отключено**),
+  `count_timeouts` (таймаутов на команду за сет, 2)
+- `period_count` = 9; несовместим с `beach_mode` и `two_wins_mode`
+  (включение `custom_mode` выключает их автоматически)
+- Режимы хранятся и в `matchmode` — 5-битной маске
+  `beach|two_wins|invert|unlimited|custom`; мобильный клиент читает её в первую очередь
+
+```bash
+# Создать произвольную игру (смена сторон отключена)
+curl -X POST http://localhost:3000/api/scoreboard/test1 \
+  -H "Content-Type: application/json" \
+  -d '{"custom_mode": true, "count_wins": 1, "score_wins": 21, "score_change": 0}'
+
+# ...или включить произвольный режим у существующей игры и задать настройки
+curl -X POST http://localhost:3000/api/scoreboard/test1/mode \
+  -H "Content-Type: application/json" \
+  -d '{"custom_mode": true}'
+
+curl -X PATCH http://localhost:3000/api/scoreboard/test1/settings \
+  -H "Content-Type: application/json" \
+  -d '{"count_wins": 1, "score_wins": 21, "score_change": 0}'
+```
 
 ---
 

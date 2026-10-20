@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Онлайн результаты</title>
     <script src="js/jquery-3.4.1.min.js"></script>
+    <script src="vb-config.js"></script>
     <script src="credentials.js"></script>
     <script src="js/db-config.js"></script>
     <script src="js/db-interface.js"></script>
@@ -825,7 +826,7 @@
             var groupedGames = {};
             filteredGames.forEach(function(game) {
                 var gameType = game.gameType || 'classic';
-                var tournament = game.data.tournament_name || 'НВЛ';
+                var tournament = game.data.tournament_name || '-';
                 var twoWinsMode = !!game.twoWinsMode;
                 var key = gameType + '|' + tournament + '|' + (twoWinsMode ? 'two' : 'three');
 
@@ -963,7 +964,7 @@
             var tournaments = new Set();
             
             Object.values(games).forEach(function(game) {
-                var tournament = game.data.tournament_name || 'НВЛ';
+                var tournament = game.data.tournament_name || '-';
                 tournaments.add(tournament);
             });
             
@@ -1027,7 +1028,7 @@
                             data: {
                                 home_team: data.home_team,
                                 away_team: data.away_team,
-                                tournament_name: data.tournament_name || 'НВЛ',
+                                tournament_name: data.tournament_name || '-',
                                 game_type: gameType,
                                 two_wins_mode: !!data.two_wins_mode,
                                 set_history: setsScore,
@@ -1050,8 +1051,8 @@
                         }
 
                         // Then by tournament name
-                        var tournamentA = a.data.tournament_name || 'НВЛ';
-                        var tournamentB = b.data.tournament_name || 'НВЛ';
+                        var tournamentA = a.data.tournament_name || '-';
+                        var tournamentB = b.data.tournament_name || '-';
                         var tournamentCompare = tournamentA.localeCompare(tournamentB);
                         if (tournamentCompare !== 0) {
                             return tournamentCompare;
@@ -1096,7 +1097,7 @@
             var groupedGames = {};
             Object.values(finishedGames).forEach(function(game) {
                 var gameType = game.gameType || 'classic';
-                var tournament = game.data.tournament_name || 'НВЛ';
+                var tournament = game.data.tournament_name || '-';
                 var twoWinsMode = !!game.twoWinsMode;
                 var key = gameType + '|' + tournament + '|' + (twoWinsMode ? 'two' : 'three');
 

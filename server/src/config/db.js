@@ -109,6 +109,11 @@ async function initializeDb() {
   try {
     client = new PocketBase(url);
 
+    // D2: отключаем автоотмену запросов. Клиент один на весь процесс, поэтому
+    // PocketBase SDK по умолчанию отменял бы предыдущий незавершённый запрос
+    // при старте следующего (параллельные POST /score теряли очки и давали 500).
+    client.autoCancellation(false);
+
     // Авторизуемся как админ для серверных операций
     if (adminEmail && adminPassword) {
       try {

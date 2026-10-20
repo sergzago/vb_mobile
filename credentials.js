@@ -8,6 +8,54 @@
  * или локальный файл credentials.local.js (добавлен в .gitignore)
  */
 
+// ============================================================================
+// ПРЕФИКС SAME-ORIGIN ПУТЕЙ (настраиваемый + с учётом подпутя развёртывания)
+// ============================================================================
+// Фронтенд обращается к БД и API по относительным путям ВНУТРИ каталога
+// приложения (без CORS). Nginx контейнера frontend проксирует их в docker-сеть:
+//     <APP_PREFIX>pb/  → контейнер pocketbase:8090
+//     <APP_PREFIX>api/ → контейнер server:3000
+//
+// Префикс НЕ корневой (не '/pb/' и не '/api/'), чтобы не конфликтовать с чужими
+// путями на общем домене и с внешним reverse-proxy, который может занимать эти
+// пути (например, другой сервис на https://домен/api/).
+//
+// ВАЖНО (развёртывание под подпутём). Если приложение открыто не от корня
+// домена (напр. https://host/myvb/), путь НЕЛЬЗЯ строить от корня: иначе запрос
+// уйдёт в /vb/... и получит 404. Значение, которое отдаёт nginx
+// (window.VB_APP_PREFIX, напр. '/vb/'), приводится к относительному виду ('vb/')
+// и присоединяется к КАТАЛОГУ текущей страницы:
+//     корень домена → https://host/       + vb/ → /vb/
+//     подпуть       → https://host/myvb/  + vb/ → /myvb/vb/
+// Внешний прокси при этом срезает подпуть, поэтому внутри контейнера nginx
+// продолжает слушать /vb/pb/ и /vb/api/ — APP_PREFIX для nginx менять не нужно.
+//
+// Приоритет значения: window.VB_APP_PREFIX (рантайм, из APP_PREFIX nginx) →
+// значение по умолчанию. В Node.js окна нет — используется корневой '/vb/'
+// (сервер этот путь игнорирует, у него свой POCKETBASE_URL).
+function _appDir() {
+  try {
+    if (typeof window === 'undefined' || !window.location) return '/';
+    var href = (typeof document !== 'undefined' && document.baseURI)
+      ? document.baseURI
+      : window.location.href;
+    if (href) {
+      var dir = new URL('.', href).pathname; // каталог страницы: '/myvb/'
+      if (dir) return dir;
+    }
+  } catch (e) {}
+  return '/';
+}
+
+// Относительный суффикс префикса ('vb/') — без ведущих и дублирующих слэшей
+var APP_PREFIX_SUFFIX = (typeof window !== 'undefined' && window.VB_APP_PREFIX)
+  ? String(window.VB_APP_PREFIX)
+  : 'vb/';
+APP_PREFIX_SUFFIX = APP_PREFIX_SUFFIX.replace(/^\/+/, '').replace(/\/+$/, '') + '/';
+
+// Абсолютный путь от корня домена с учётом подпутя: '/vb/' или '/myvb/vb/'
+var APP_PREFIX = _appDir().replace(/\/+$/, '') + '/' + APP_PREFIX_SUFFIX;
+
 var CREDENTIALS = {
   // ============================================================================
   // РЕЖИМ АВТОРИЗАЦИИ (единый источник для браузера и сервера)
@@ -25,20 +73,25 @@ var CREDENTIALS = {
   // SERVER (Node.js API)
   // ============================================================================
   server: {
-    url: ''
+    // Абсолютный URL API-сервера ('' = текущий origin). Обычно не нужен —
+    // достаточно same-origin префикса ниже.
+    url: '',
+    // Same-origin путь API-сервера (nginx проксирует его в контейнер server).
+    // Полный путь запроса: prefix + 'auth/log' → '/vb/api/auth/log'
+    prefix: APP_PREFIX + 'api/'
   },
 
   // ============================================================================
   // POCKETBASE УЧЕТНЫЕ ДАННЫЕ
   // ============================================================================
   pocketbase: {
-    // URL для браузера (PocketBase SDK). '/pb/' — same-origin путь,
-    // который nginx фронтенда проксирует в контейнер pocketbase (nginx.conf).
-    // Так приложение работает и по http://localhost:8080, и по https://домен —
+    // URL для браузера (PocketBase SDK). APP_PREFIX + 'pb/' — same-origin путь,
+    // который nginx фронтенда проксирует в контейнер pocketbase (см. nginx.conf.template).
+    // Так приложение работает и по http://localhost:8081, и по https://домен —
     // без CORS и без указания протокола/порта.
     // ВАЖНО: это значение только для браузера. Node.js API (server) берёт адрес
     // PocketBase из переменной окружения POCKETBASE_URL (.env / docker-compose).
-    url: '/pb/',
+    url: APP_PREFIX + 'pb/',
     // SSE-realtime подписка. Требует поддержки SSE в реверс-прокси
     // (см. REALTIME_SETUP.md). При проблемах установите realtime: false —
     // приложение будет работать через страховочный опрос (1-2 сек).

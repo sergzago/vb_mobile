@@ -13,15 +13,13 @@
 # =============================================================================
 FROM node:18-alpine
 
-# Порт PocketBase по умолчанию (берется из .env при docker compose build)
-# Используется для подстановки в js/db-config.js на этапе сборки образа
-ARG POCKETBASE_PORT=8090
-
 WORKDIR /usr/src/app
 
-# Зависимости (слой кэшируется, пока не меняется package.json)
+# Зависимости (слой кэшируется, пока не меняется package.json/package-lock.json)
 COPY server/package*.json ./
-RUN npm ci --only=production
+# --omit=dev — актуальная замена устаревшего --only=production (npm ≥ 9);
+# --no-audit/--no-fund — убирает лишние сетевые запросы при высоком RTT до registry
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # Исходники API, init-скрипт, swagger
 COPY server/src ./src
@@ -33,10 +31,6 @@ COPY js /usr/src/js
 COPY credentials.js /usr/src/credentials.js
 COPY pb_schema.json /usr/src/pb_schema.json
 COPY pocketbase_collections_export.json /usr/src/pocketbase_collections_export.json
-
-# Подставляем порт PocketBase из ARG в js/db-config.js (фоллбэк на docker-сеть)
-# Заглушка __POCKETBASE_PORT__ заменяется на реальный порт, заданный в .env
-RUN sed -i "s/__POCKETBASE_PORT__/${POCKETBASE_PORT}/" /usr/src/js/db-config.js
 
 # Логи авторизации: в docker-compose монтируется named volume server_logs.
 # Каталог создаём заранее и отдаём пользователю node: Docker копирует владельца

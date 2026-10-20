@@ -18,6 +18,10 @@
   var provider = 'pocketbase';
   var client = null; // PocketBase client
   var initialized = false;
+  // Промис текущей/завершённой инициализации: повторные DB.init() во время
+  // загрузки SDK возвращают тот же промис (без повторной вставки <script>),
+  // после успеха — уже разрешённый промис, после провала — null (можно ретраить).
+  var initPromise = null;
 
   // ============================================================================
   // FIELDS UTILITIES
@@ -253,13 +257,34 @@
   function getPocketBaseClient() {
     if (client) return client;
 
-    // SDK должен быть загружен через init()
-    if (typeof PocketBase === 'undefined') {
-      throw new Error('PocketBase SDK не загружен. Вызовите DB.init() перед использованием.');
+    // SDK должен быть загружен через init(). До завершения инициализации
+    // бросать синхронную ошибку нельзя: mobile.js вызывает showApp() до
+    // DB.init() (гостевой режим) — иначе DB.templates.list() падает с
+    // "PocketBase SDK не загружен" вне promise-цепочки.
+    if (!initialized || typeof PocketBase === 'undefined') {
+      throw new Error('БД ещё не инициализирована. Дождитесь DB.init().');
     }
 
     client = new PocketBase(DB_CONFIG.pocketbase.url);
     return client;
+  }
+
+  /**
+   * Обёртка для методов DB: ошибку "БД ещё не инициализирована" (вызов до
+   * завершения DB.init()) превращаем в отклонённый промис, а не синхронный
+   * throw. Так loadMobileTemplateSelect/loadGamesList корректно уходят
+   * в .catch вместо "Sync error loading template list".
+   */
+  function requireClient() {
+    try {
+      return { ok: true, client: getPocketBaseClient() };
+    } catch (e) {
+      return { ok: false, error: e };
+    }
+  }
+
+  function notInitialized() {
+    return Promise.reject(new Error('БД ещё не инициализирована. Дождитесь DB.init().'));
   }
 
   // ============================================================================
@@ -297,9 +322,14 @@
   // ============================================================================
 
   function init() {
+    // Уже инициализировано — разрешённый промис.
     if (initialized) return Promise.resolve();
+    // Инициализация уже идёт (повторный вызов до готовности, напр. из
+    // showApp()+DB.init() в гостевом режиме) — возвращаем тот же промис
+    // вместо повторной загрузки SDK.
+    if (initPromise) return initPromise;
 
-    return new Promise(function(resolve, reject) {
+    initPromise = new Promise(function(resolve, reject) {
       try {
          if (provider === 'pocketbase') {
           // Динамически загружаем PocketBase SDK если нужно
@@ -314,14 +344,22 @@
               }
             initialized = true;
             resolve();
-          }).catch(reject);
+          }).catch(function(err) {
+            // Провал init — сбрасываем промис, чтобы следующий DB.init()
+            // мог повторить попытку (иначе залипший rejected-кэш).
+            initPromise = null;
+            reject(err);
+          });
         } else {
           reject(new Error('Неизвестный провайдер БД: ' + provider));
         }
       } catch (e) {
+        initPromise = null;
         reject(e);
       }
     });
+
+    return initPromise;
   }
 
   // ============================================================================
@@ -789,7 +827,11 @@
       var today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      var pb = getPocketBaseClient();
+      // Вызов до DB.init() — отклонённый промис вместо синхронного throw
+      // (см. requireClient): UI уходит в .catch, а не в "Sync error".
+      var req = requireClient();
+      if (!req.ok) return notInitialized();
+      var pb = req.client;
       // PocketBase хранит даты с пробелом вместо T
       var todayStr = toPbDate(today);
       return pb.collection(DB_CONFIG.collections.VOLLEYBALL).getFullList({
@@ -803,7 +845,10 @@
      */
     queryAll: function() {
 
-      var pb = getPocketBaseClient();
+      // Вызов до DB.init() — отклонённый промис вместо синхронного throw.
+      var req = requireClient();
+      if (!req.ok) return notInitialized();
+      var pb = req.client;
       return pb.collection(DB_CONFIG.collections.VOLLEYBALL).getFullList({
         sort: '-lastEdited'
       });
@@ -1208,7 +1253,11 @@
      */
     list: function() {
 
-      var pb = getPocketBaseClient();
+      // Вызов до DB.init() (гостевой режим: showApp() раньше init) —
+      // отклонённый промис вместо синхронного throw.
+      var req = requireClient();
+      if (!req.ok) return notInitialized();
+      var pb = req.client;
       // Коллекция templates может отсутствовать — не даём синхронной ошибке
       // прервать загрузку данных игры
       var collection;

@@ -76,16 +76,30 @@ router.patch('/:game_id', validateGameId, async (req, res, next) => {
   try {
     const { game_id } = req.params;
     const data = req.body;
-    
+
+    // D3: счёт нельзя менять «в обход» игровой логики. Прямая запись
+    // home_score/away_score не запускает проверку победы в сете, поэтому
+    // партия не засчитывается. Очки принимаются только через POST /score.
+    if (data.home_score !== undefined || data.away_score !== undefined) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'home_score/away_score нельзя менять через PATCH: очки принимаются только через POST /api/scoreboard/{game_id}/score, иначе выигранные партии не засчитываются',
+      });
+    }
+
     const allowedFields = [
       'home_team', 'away_team', 'home_color', 'away_color',
       'tournament_name', 'venue', 'custom_label', 'show',
-      'home_score', 'away_score', 'home_fouls', 'away_fouls',
+      'home_fouls', 'away_fouls',
       'home_sets', 'away_sets', 'current_period', 'period_count',
       'home_side', 'away_side', 'beach_mode', 'beach_current_set',
       'beach_switch_message', 'beach_match_finished', 'classic_match_finished',
       'classic_tiebreak_switch_done', 'two_wins_mode', 'invert_tablo',
       'unlimited_score', 'set_history', 'home_timeouts', 'away_timeouts',
+      // Произвольный вариант игры
+      'custom_mode', 'matchmode',
+      'count_wins', 'score_wins', 'score_tie', 'balance',
+      'score_change', 'count_timeouts',
     ];
     
     const filteredData = {};
@@ -230,14 +244,13 @@ router.patch('/:game_id/settings', validateGameId, async (req, res, next) => {
 
 /**
  * @route   POST /api/scoreboard/:game_id/mode
- * @desc    Переключить режим (пляжный/классический)
+ * @desc    Переключить режим (пляжный/классический/произвольный)
  */
 router.post('/:game_id/mode', validateGameId, validateMode, async (req, res, next) => {
   try {
     const { game_id } = req.params;
-    const { beach_mode } = req.body;
-    
-    const result = await getService(req).toggleMode(game_id, beach_mode);
+
+    const result = await getService(req).toggleMode(game_id, req.body);
     res.json(result);
   } catch (err) {
     next(err);
