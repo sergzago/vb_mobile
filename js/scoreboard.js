@@ -368,6 +368,11 @@ function startScoreboardSubscription(game_id) {
     }
     // Обновляем порядок на табло (функция сама проверит наличие элементов)
     updateTabloSides();
+    // Обновляем блок таймаута (функция определена только в tablo.html
+    // и сама проверяет наличие элементов на странице)
+    if (typeof updateTabloTimeoutDisplay === 'function') {
+      updateTabloTimeoutDisplay(scoreboard_data);
+    }
   });
 }
 

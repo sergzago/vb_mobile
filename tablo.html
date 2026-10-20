@@ -14,6 +14,35 @@
     <script src="js/common.js"></script>
     <script src="js/scoreboard.js"></script>
     <script>
+      /**
+       * Режим таймаута на табло.
+       * При timeout_active: верхние 2/3 экрана занимают надпись
+       * «Таймаут <НАЗВАНИЕ КОМАНДЫ>», а счёт партии уменьшается
+       * и размещается в оставшейся трети экрана.
+       * Вызывается из js/scoreboard.js при каждом обновлении данных
+       * (по той же схеме, что updateScoreboard1Display и др.).
+       * @param {object} [data] - данные табло; если не переданы, берётся
+       *                           глобальный scoreboard_data
+       */
+      function updateTabloTimeoutDisplay(data) {
+        var $screen = $('.tablo-screen');
+        if (!$screen.length) return;
+        var d = data
+          || (typeof scoreboard_data !== 'undefined' ? scoreboard_data : null)
+          || {};
+        var active = !!d['timeout_active'];
+        if (active) {
+          // ctl.js/mobile.js записывают метку вида 'Таймаут <КОМАНДА>'
+          var label = String(d['custom_label'] || '').trim();
+          if (!label || label.toLowerCase().indexOf('таймаут') !== 0) {
+            label = 'Таймаут';
+          }
+          $('.tablo-timeout-text').text(label);
+        }
+        $screen.toggleClass('timeout-active', active);
+        $('.tablo-timeout').attr('aria-hidden', active ? 'false' : 'true');
+      }
+
       $(document).ready(function(){
         // Переключение темы
         var savedTheme = localStorage.getItem('tablo-theme');
@@ -167,6 +196,10 @@
             subtree: true
           });
         }
+
+        // Начальное состояние блока таймаута (данные придут позже
+        // через подписку в js/scoreboard.js)
+        updateTabloTimeoutDisplay();
       });
     </script>
     <style>
@@ -274,8 +307,13 @@
         width: 100%;
         max-width: 100%;
         box-sizing: border-box;
-        /* Отступ справа — место под вертикальную колонку кнопок
-           (тема + полный экран), чтобы длинное название их не перекрывало */
+        /* Симметричные отступы: справа — место под вертикальную колонку
+           кнопок (тема + полный экран), чтобы длинное название их не
+           перекрывало; слева — равный компенсирующий отступ. Без него
+           контент строки смещался влево на 24px, и названия команд со
+           счётом по сетам расходились по центру с большим счётом
+           (и в обычном режиме, и в режиме таймаута). */
+        padding-left: 48px;
         padding-right: 48px;
         text-align: center;
         /* Базовый размер строки команд; JS (fitTeamNames) только УМЕНЬШАЕТ
@@ -455,6 +493,8 @@
         }
         .tablo-teams {
           --teams-base-size: clamp(12px, 3vw, 24px);
+          /* Симметричные отступы — строка остаётся отцентрованной */
+          padding-left: 40px;
           padding-right: 40px;
         }
         .tablo-general-score {
@@ -476,27 +516,112 @@
           font-size: clamp(10px, 3vh, 18px);
         }
       }
+      /* =====================================================================
+         Режим таймаута (timeout_active === true)
+         Верхние 2/3 экрана — надпись «Таймаут <НАЗВАНИЕ КОМАНДЫ>»,
+         оставшаяся треть — названия команд и уменьшенный счёт партии.
+         ===================================================================== */
+      .tablo-timeout {
+        /* По умолчанию блок не участвует в раскладке */
+        display: none;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        text-transform: uppercase;
+        line-height: 1.05;
+        /* Длинная строка переносится, а не обрезается */
+        font-size: min(10vw, 16vh, 190px);
+        letter-spacing: clamp(1px, 0.4vw, 8px);
+        padding: 0 clamp(8px, 3vw, 60px);
+      }
+      .tablo-timeout-text {
+        display: block;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+      /* Обёртка «названия + счёт + история»: в обычном режиме занимает
+         всё свободное место (раскладка не меняется), при таймауте —
+         оставшуюся треть экрана. gap наследуется от .tablo-screen,
+         чтобы отступы между блоками остались прежними и в медиазапросах. */
+      .tablo-main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        min-height: 0;
+        flex: 1 1 auto;
+        gap: inherit;
+      }
+
+      /* Таймаут включён: надпись — 2/3 высоты, контент — оставшаяся треть */
+      .tablo-screen.timeout-active .tablo-timeout {
+        display: flex;
+        flex: 2 1 0;
+        min-height: 0;
+      }
+      .tablo-screen.timeout-active .tablo-main {
+        flex: 1 1 0;
+        min-height: 0;
+      }
+      /* Счёт партии уменьшается и размещается в оставшейся трети.
+         Отступы в em остаются пропорциональны размеру цифр, поэтому
+         визуальный вылет scaleY(2) по-прежнему компенсируется. */
+      .tablo-screen.timeout-active .tablo-score {
+        font-size: min(16vw, 9vh, 170px);
+        margin-top: 0.55em;
+        margin-bottom: 0.5em;
+      }
+      /* Названия команд и счёт по сетам — компактнее, чтобы поместиться
+         в оставшейся трети вместе с историей сетов */
+      .tablo-screen.timeout-active .tablo-teams {
+        --teams-base-size: clamp(14px, 2.6vw, 28px);
+      }
+      .tablo-screen.timeout-active .tablo-general-score {
+        font-size: clamp(12px, 2.4vw, 24px);
+      }
+      .tablo-screen.timeout-active .set-history {
+        font-size: clamp(10px, 2.4vh, 22px);
+        padding: 2px 8px;
+        min-height: 0;
+        /* Не сжимается под давлением: место под неё освобождает счёт */
+        flex: 0 0 auto;
+      }
     </style>
   </head>
   <body>
     <button id="fullscreen-toggle" title="Полноэкранный режим" aria-label="Полноэкранный режим"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
     <button id="theme-toggle" title="Переключить тему" aria-label="Переключить тему"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13.5A8 8 0 0 1 10.5 4 8 8 0 1 0 20 13.5z"/></svg></button>
     <div class="tablo-screen">
-      <div class="tablo-teams">
-        <span class="tablo-left-team">HOME</span>
-        <span class="tablo-general-score">
-          <span class="home_sets">0</span>
-          <span class="tablo-separator">:</span>
-          <span class="away_sets">0</span>
-        </span>
-        <span class="tablo-right-team">AWAY</span>
+      <!-- Надпись «Таймаут <КОМАНДА>» — занимает верхние 2/3 экрана,
+           пока timeout_active === true. Показывает/скрывает updateTabloTimeoutDisplay() -->
+      <div class="tablo-timeout" aria-hidden="true">
+        <span class="tablo-timeout-text">Таймаут</span>
       </div>
-      <div class="tablo-score">
-        <span class="away_score">0</span>
-        <span class="tablo-separator score-separator">:</span>
-        <span class="home_score">0</span>
+      <!-- Нижняя часть: названия команд, счёт партии и история сетов.
+           В обычном режиме — на весь экран, при таймауте — на оставшейся трети -->
+      <div class="tablo-main">
+        <div class="tablo-teams">
+          <span class="tablo-left-team">HOME</span>
+          <span class="tablo-general-score">
+            <span class="home_sets">0</span>
+            <span class="tablo-separator">:</span>
+            <span class="away_sets">0</span>
+          </span>
+          <span class="tablo-right-team">AWAY</span>
+        </div>
+        <div class="tablo-score">
+          <span class="away_score">0</span>
+          <span class="tablo-separator score-separator">:</span>
+          <span class="home_score">0</span>
+        </div>
+        <div id="set-history-bottom" class="set-history set-history-bottom">&nbsp;</div>
       </div>
-      <div id="set-history-bottom" class="set-history set-history-bottom">&nbsp;</div>
     </div>
   </body>
 </html>
