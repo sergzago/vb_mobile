@@ -61,6 +61,16 @@
             || document.mozFullScreenElement || document.msFullscreenElement || null;
         }
 
+        // Встроен ли документ в iframe? Сравнение window.self !== window.top
+        // безопасно и для cross-origin, и для file:// (исключения не бросает).
+        function isEmbedded() {
+          try {
+            return window.self !== window.top;
+          } catch (e) {
+            return true; // на всякий случай считаем встроенным
+          }
+        }
+
         function updateFullscreenButton() {
           var isFull = !!getFullscreenElement();
           $('#fullscreen-toggle')
@@ -72,6 +82,16 @@
           var root = document.documentElement;
           var apiAvailable = !!(root.requestFullscreen || root.webkitRequestFullscreen
             || root.mozRequestFullScreen || root.msRequestFullscreen);
+
+          // В iframe табло не должно уходить в полноэкранный режим само:
+          // полноэкранный iframe перекрывает родительский документ (панель
+          // мультитабло с кнопкой «Мультитабло» пропадает). Полноэкранный
+          // режим на уровне мультитабло переключают его собственные кнопки.
+          if (isEmbedded()) {
+            $('#fullscreen-toggle').hide();
+            return;
+          }
+
           // В iframe без allowfullscreen fullscreenEnabled === false — прячем кнопку
           var allowed = document.fullscreenEnabled;
           if (allowed === undefined) allowed = document.webkitFullscreenEnabled;

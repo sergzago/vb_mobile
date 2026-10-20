@@ -1127,6 +1127,9 @@
     var base = BASE_URL;
     document.getElementById('linkScoreboard').href = base + 'sb.html?game=' + gid;
     document.getElementById('linkTablo').href = base + 'tablo.html?game=' + gid;
+    // Мультитабло — общий экран со всеми играми. Ссылка без параметра game:
+    // открывается сетка игр, а большое табло выбирается кликом по плитке.
+    document.getElementById('linkMultitablo').href = base + 'multitablo.html';
     document.getElementById('linkResults').href = base + 'results.html';
     document.getElementById('linkOnline').href = base + 'online.html';
   }

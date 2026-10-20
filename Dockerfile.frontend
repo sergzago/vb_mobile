@@ -24,7 +24,7 @@ COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 # Статика приложения. Список фиксированный: screenshots/, документация,
 # логотипы-дубликаты и прочий мусор в образ не попадают.
 COPY index.html mobile.html online.html results.html sb.html tablo.html \
-     scoreboard.html login.html admin.html ctl.html \
+     scoreboard.html multitablo.html login.html admin.html ctl.html \
      manifest.json sw.js logo_base64.txt \
      credentials.js vb-config.js \
      /usr/share/nginx/html/
