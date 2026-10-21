@@ -59,7 +59,7 @@ self.addEventListener('fetch', function(event) {
       }
       return response;
     }).catch(function() {
-      return caches.match(event.request);
+      return caches.match(event.request) || new Response('', { status: 503, statusText: 'Service Unavailable' });
     })
   );
 });

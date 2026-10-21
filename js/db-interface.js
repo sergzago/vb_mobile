@@ -702,14 +702,15 @@
           .catch(function() {});
       }, 2000);
 
-      // Функция отписки: снимаем SSE-подписку по topic '*' (ключ регистрации),
-      // кастомный ключ для совместимости и останавливаем страховочный опрос
+      // Функция отписки: закрываем SSE-подписку и останавливаем страховочный опрос.
+      // unsubscribe('*') в PocketBase SDK 0.26.8 равносильно unsubscribeByPrefix(collectionId)
+      // и сносит все подписки коллекции на ТЕКУЩЕЙ странице. scoreboard.js загружается
+      // только на страницах табло (tablo.html, scoreboard.html, sb.html) — не на страницах
+      // управления (ctl.html → mobile.html, mobile.js), поэтому здесь это безопасно:
+      // не заденет подписки управления, они живут на своих страницах со своими клиентами.
       return function() {
         try {
           pb.collection(DB_CONFIG.collections.VOLLEYBALL).unsubscribe('*');
-        } catch (e) {}
-        try {
-          pb.collection(DB_CONFIG.collections.VOLLEYBALL).unsubscribe(subscriptionKey);
         } catch (e) {}
         clearInterval(pollTimer);
       };

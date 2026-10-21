@@ -3,6 +3,7 @@ var _unsubscribe = null;
 
 var currentTemplateId = null;
 var _unsubscribeTemplate = null;
+var _currentGameId = null; // защита от дубляжа подписки на одну игру
 
 // Дефолтные данные (если документ ещё не создан)
 var DEFAULT_SCOREBOARD_DATA = {
@@ -244,7 +245,21 @@ var _lastSbPayload = null; // сериализованные данные пос
 // Подписка на изменения через DB интерфейс (вызывается после DB.init)
 function startScoreboardSubscription(game_id) {
   console.log('sb/ctl: startScoreboardSubscription called, game_id:', game_id);
-  DB.scoreboard.subscribe(
+
+  // Защита от дубляжа: повторный вызов для той же игры не создаёт лишнюю подписку
+  if (_currentGameId === game_id) {
+    console.log('sb/ctl: subscription for game_id already active, skipping:', game_id);
+    return;
+  }
+
+  // Отписка от предыдущей подписки перед созданием новой
+  if (_unsubscribe) {
+    try { _unsubscribe(); } catch (e) { console.error('sb/ctl: error unsubscribing previous:', e); }
+    _unsubscribe = null;
+  }
+  _currentGameId = game_id;
+
+  _unsubscribe = DB.scoreboard.subscribe(
   game_id,
   function(data){
     console.log('sb/ctl: scoreboard data received, show:', data ? data.show : 'null');
@@ -634,4 +649,29 @@ $(document).ready(function() {
   }).catch(function(err) {
     console.error('DB initialization failed:', err);
   });
+
+  // Очистка при закрытии/перезагрузке страницы (в т.ч. закрытие iframe-табло из мультитабло)
+function cleanupSubscription() {
+  if (_unsubscribe) {
+    try { _unsubscribe(); } catch (e) { console.error('sb/ctl: error cleaning up subscription:', e); }
+    _unsubscribe = null;
+  }
+  _currentGameId = null;
+}
+
+// Экспонируем глобально, чтобы multitablo.html мог вызвать очистку явно перед сменой src iframe
+window.cleanupScoreboardSubscription = cleanupSubscription;
+
+// Регистрация в родительском окне (multitablo.html) для внешней очистки при навигации iframe
+if (window.parent && window.parent !== window) {
+  try { window.parent._sbCleanup = cleanupSubscription; } catch (e) {}
+}
+
+$(window).on('pagehide beforeunload unload', cleanupSubscription);
+// visibilitychange — срабатывает когда страница/iframe скрывается (iframe → about:blank)
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') {
+    cleanupSubscription();
+  }
+});
 });
