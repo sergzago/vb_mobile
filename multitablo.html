@@ -993,6 +993,159 @@
         var currentGameId = null;
         var detailPushed = false;
         var suppressPopstate = false; // гасит popstate от history.back() в backToGrid()
+        var mtActiveUnsubscribe = null; // unsubscribe для subscribeActive на главной странице
+        var mtTransitioning = false;    // защита от быстрых повторных открытий/закрытий
+        // Ресурсы iframe-табло (очищаются при закрытии, чтобы не накапливаться
+        // при повторных открытиях — иначе через 3–5 открытий мультитабло зависает)
+        var mtFrameObserver = null;   // MutationObserver тела iframe-табло
+        var mtFrameExitFs = null;     // обработчик fullscreenchange для iframe
+        var mtFrameDoc = null;        // документ iframe для очистки обработчиков
+
+        // Явно закрывает подписку и опрос внутри загруженного в iframe tablo.html
+        // перед смене его src. scoreboard.js внутри tablo.html экспонирует
+        // window.cleanupScoreboardSubscription — вызываем его из родительского
+        // окна, чтобы SSE-соединение и таймер опроса закрылись детерминированно,
+        // а не полагаться на асинхронное beforeunload/unload.
+        function cleanupIframeSubscription() {
+          try {
+            var frame = document.getElementById('mt-detail-frame');
+            var win = frame && (frame.contentWindow || frame.contentWindow);
+            if (win && typeof win.cleanupScoreboardSubscription === 'function') {
+              win.cleanupScoreboardSubscription();
+            }
+          } catch (e) {
+            // кросс-домен или фрейм ещё не загружен — пропускаем
+          }
+        }
+
+        // Полная замена iframe-элемента в DOM. Удаляет старый элемент — браузер
+        // Zerstörывает весь его JS-контекст (включая SSE-соединения PocketBase,
+        // таймеры опроса, слушатели событий). Создаёт новый чистый iframe.
+        // Возвращает промис, который разрешается после загрузки целевого src.
+        function replaceDetailFrame(targetSrc) {
+          return new Promise(function (resolve) {
+            var oldFrame = document.getElementById('mt-detail-frame');
+            var container = document.getElementById('mt-detail');
+
+            // Снимаем родительские ссылки на документ старого iframe
+            if (mtFrameObserver) {
+              try { mtFrameObserver.disconnect(); } catch (e) {}
+              mtFrameObserver = null;
+            }
+            if (mtFrameExitFs && mtFrameDoc) {
+              try { mtFrameDoc.removeEventListener('fullscreenchange', mtFrameExitFs); } catch (e) {}
+              try { mtFrameDoc.removeEventListener('webkitfullscreenchange', mtFrameExitFs); } catch (e) {}
+              mtFrameExitFs = null;
+            }
+            if (mtFrameDoc) {
+              mtFrameDoc._mtFsGuard = false;
+              mtFrameDoc._mtThemeGuard = false;
+              mtFrameDoc = null;
+            }
+
+            // Удаляем старый iframe из DOM — браузер уничтожает его JS-контекст
+            if (oldFrame && oldFrame.parentNode) {
+              try { $(oldFrame).off('load'); } catch (e) {}
+              oldFrame.parentNode.removeChild(oldFrame);
+            }
+
+            // Создаём новый iframe
+            var newFrame = document.createElement('iframe');
+            newFrame.id = 'mt-detail-frame';
+            newFrame.title = 'Табло игры';
+            newFrame.style.width = '100%';
+            newFrame.style.height = '100%';
+            newFrame.style.border = 'none';
+            newFrame.src = 'about:blank';
+
+            // Прикрепляем обработчик загрузки ПЕРЕД установкой целевого src
+            $(newFrame).on('load', function onFrameLoaded() {
+              var currentSrc = newFrame.src || '';
+              if (currentSrc.indexOf('about:blank') === 0 && targetSrc !== 'about:blank') {
+                $(newFrame).off('load', onFrameLoaded);
+                newFrame.src = targetSrc;
+                $(newFrame).on('load', function onTargetLoaded() {
+                  $(newFrame).off('load', onTargetLoaded);
+                  try { onDetailFrameLoad.call(newFrame); } catch (e) {}
+                  resolve(newFrame);
+                });
+              } else if (targetSrc === 'about:blank') {
+                resolve(newFrame);
+              } else {
+                try { onDetailFrameLoad.call(newFrame); } catch (e) {}
+                resolve(newFrame);
+              }
+            });
+
+            // Вставляем в контейнер
+            if (container) {
+              var toolbar = document.getElementById('mt-detail-toolbar');
+              if (toolbar && toolbar.parentNode === container) {
+                container.insertBefore(newFrame, toolbar);
+              } else {
+                container.appendChild(newFrame);
+              }
+            }
+          });
+        }
+
+        // Обработчик загрузки iframe-табло — именованная функция,
+        // чтобы перепривязывать при замене iframe-элемента.
+        function onDetailFrameLoad() {
+          $('#mt-detail-loader').hide();
+          try {
+            var fdoc = this.contentDocument || (this.contentWindow && this.contentWindow.document);
+            if (fdoc && fdoc.body) {
+              fdoc.body.classList.toggle('dark-theme', localStorage.getItem('tablo-theme') === 'dark');
+            }
+            // Кнопку полного экрана tablo.html прячем (страховка: основной
+            // запрет — отсутствующий allowfullscreen у iframe, из-за которого
+            // tablo.html сам скрывает кнопку по document.fullscreenEnabled).
+            // Если iframe всё же уйдёт в полноэкранный режим своим документом,
+            // браузер перекроет кнопку возврата — поэтому сразу из него
+            // выходим (на случай браузеров, игнорирующих allowfullscreen)
+            if (fdoc && fdoc.head && !fdoc.getElementById('mt-hide-tablo-fs')) {
+              var hideFs = fdoc.createElement('style');
+              hideFs.id = 'mt-hide-tablo-fs';
+              hideFs.textContent = '#fullscreen-toggle { display: none !important; }';
+              fdoc.head.appendChild(hideFs);
+            }
+            if (fdoc && !fdoc._mtFsGuard) {
+              fdoc._mtFsGuard = true;
+              mtFrameExitFs = function () {
+                var fe = fdoc.fullscreenElement || fdoc.webkitFullscreenElement;
+                if (!fe) return;
+                var exitFs = fdoc.exitFullscreen || fdoc.webkitExitFullscreen;
+                if (!exitFs) return;
+                try {
+                  var res = exitFs.call(fdoc);
+                  if (res && typeof res.catch === 'function') res.catch(function () {});
+                } catch (err) {}
+              };
+              fdoc.addEventListener('fullscreenchange', mtFrameExitFs);
+              fdoc.addEventListener('webkitfullscreenchange', mtFrameExitFs);
+              mtFrameExitFs();
+            }
+            mtFrameDoc = fdoc;
+            // Обратная синхронизация темы: кнопка «Режим» (смена темы)
+            // рисуется самим tablo.html внутри iframe. При её нажатии
+            // тема меняется в iframe — переносим её в мультитабло,
+            // чтобы кнопки возврата/полного экрана выглядели так же,
+            // как кнопка режима (одинаковый стиль в обеих темах).
+            // Источник истины — класс dark-theme на теле iframe.
+            if (fdoc && fdoc.body && !fdoc._mtThemeGuard) {
+              fdoc._mtThemeGuard = true;
+              if (window.MutationObserver) {
+                mtFrameObserver = new MutationObserver(function () {
+                  var isDark = fdoc.body.classList.contains('dark-theme');
+                  localStorage.setItem('tablo-theme', isDark ? 'dark' : 'light');
+                  $('body').toggleClass('dark-theme', isDark);
+                });
+                mtFrameObserver.observe(fdoc.body, { attributes: true, attributeFilter: ['class'] });
+              }
+            }
+          } catch (e) {}
+        }
 
         // ==================================================================
         // Раскладка сетки: число колонок/строк и высота плитки
@@ -1238,6 +1391,7 @@
               fitTileTeamNames(tile);
             });
             ro.observe(tile.querySelector('.mt-tile-screen'));
+            tile._mtResizeObserver = ro; // храним, чтобы отключить при удалении плитки
           }
           return tile;
         }
@@ -1312,7 +1466,14 @@
           // Удаляем плитки исчезнувших игр
           Object.keys(tiles).forEach(function (id) {
             if (!seen[id]) {
-              if (tiles[id].parentNode) tiles[id].parentNode.removeChild(tiles[id]);
+              var tile = tiles[id];
+              // Отключаем ResizeObserver перед удалением из DOM — иначе
+              // наблюдение продолжается и удерживает ссылку на удалённый элемент
+              if (tile._mtResizeObserver) {
+                try { tile._mtResizeObserver.disconnect(); } catch (e) {}
+                tile._mtResizeObserver = null;
+              }
+              if (tile.parentNode) tile.parentNode.removeChild(tile);
               delete tiles[id];
               delete lastJson[id];
             }
@@ -1363,7 +1524,7 @@
             // Реальное время: одна подписка на все активные игры
             if (typeof DB.scoreboard.subscribeActive === 'function') {
               try {
-                DB.scoreboard.subscribeActive(function (list) {
+                mtActiveUnsubscribe = DB.scoreboard.subscribeActive(function (list) {
                   lastUpdate = new Date();
                   if (list && list.length) {
                     dataMode = 'active';
@@ -1391,56 +1552,62 @@
         // ==================================================================
         function openDetail(id, pushState) {
           if (!id) return;
-          // Явная очистка подписок предыдущего табло внутри iframe
-          // (через регистрацию window.parent._sbCleanup из scoreboard.js или напрямую через contentWindow)
-          try {
-            if (typeof window._sbCleanup === 'function') {
-              window._sbCleanup();
-              window._sbCleanup = null;
-            }
-          } catch (e) { /* ignore */ }
-          try {
-            var frame = document.getElementById('mt-detail-frame');
-            var fwin = frame && frame.contentWindow;
-            if (fwin && typeof fwin.cleanupScoreboardSubscription === 'function') {
-              fwin.cleanupScoreboardSubscription();
-            }
-          } catch (e) { /* cross-origin or other — ignore */ }
+          // Защита от быстрых повторных открытий: если переход уже идёт,
+          // игнорируем новый вызов hasta его завершения.
+          if (mtTransitioning) return;
+          mtTransitioning = true;
+
           currentGameId = id;
           $('#mt-detail-loader').show();
-          $('#mt-detail-frame').attr('src', 'tablo.html?game=' + encodeURIComponent(id));
-          $('#mt-detail').addClass('open').attr('aria-hidden', 'false');
-          if (pushState) {
-            try {
-              history.pushState({ game: id }, '', '?game=' + encodeURIComponent(id));
-              detailPushed = true;
-            } catch (e) {}
-          }
-          $('#mt-back').focus();
+
+          // cleanupIframeSubscription() — best-effort попытка корректно
+          // отписаться внутри tablo.html перед выгрузкой страницы.
+          cleanupIframeSubscription();
+
+          // replaceDetailFrame полностью уничтожает старый iframe-элемент
+          // (и все его SSE-соединения/таймеры) и создаёт новый.
+          // Сначала загружаем about:blank, чтобы браузер Zerstörыл старый
+          // JS-контекст, затем загружаем целевой табло.
+          replaceDetailFrame('about:blank').then(function () {
+            return replaceDetailFrame('tablo.html?game=' + encodeURIComponent(id));
+          }).then(function (newFrame) {
+            $('#mt-detail').addClass('open').attr('aria-hidden', 'false');
+            if (pushState) {
+              try {
+                history.pushState({ game: id }, '', '?game=' + encodeURIComponent(id));
+                detailPushed = true;
+              } catch (e) {}
+            }
+            $('#mt-back').focus();
+            mtTransitioning = false;
+          }).catch(function (e) {
+            console.error('multitablo: replaceDetailFrame error', e);
+            mtTransitioning = false;
+          });
         }
 
         function closeDetail() {
           if (!currentGameId) return;
+          // Защита от быстрых повторных закрытий
+          if (mtTransitioning) return;
+          mtTransitioning = true;
+
           currentGameId = null;
           detailPushed = false;
           $('#mt-detail').removeClass('open').attr('aria-hidden', 'true');
-          // Явная очистка подписок внутри iframe перед сменой src —
-          // pagehide/beforeunload в iframe могут не сработать надёжно
-          try {
-            if (typeof window._sbCleanup === 'function') {
-              window._sbCleanup();
-              window._sbCleanup = null;
-            }
-          } catch (e) { /* ignore */ }
-          try {
-            var frame = document.getElementById('mt-detail-frame');
-            var fwin = frame && frame.contentWindow;
-            if (fwin && typeof fwin.cleanupScoreboardSubscription === 'function') {
-              fwin.cleanupScoreboardSubscription();
-            }
-          } catch (e) { /* cross-origin or other — ignore */ }
-          // Сразу переводим iframe на about:blank — подписки уже закрыты синхронно
-          $('#mt-detail-frame').attr('src', 'about:blank');
+
+          // cleanupIframeSubscription() — best-effort отписка внутри tablo.html
+          cleanupIframeSubscription();
+
+          // replaceDetailFrame полностью уничтожает старый iframe-элемент
+          // (и все его SSE-соединения/таймеры) и создаёт новый с about:blank.
+          replaceDetailFrame('about:blank').then(function () {
+            mtTransitioning = false;
+          }).catch(function (e) {
+            console.error('multitablo: replaceDetailFrame close error', e);
+            mtTransitioning = false;
+          });
+
           // Тему могли переключить внутри tablo.html — синхронизируем сетку
           applyThemeFromStorage();
         }
@@ -1495,6 +1662,23 @@
         // ==================================================================
         // Инициализация
         // ==================================================================
+        // Загрузка логотипа: читает logo_base64.txt и подменяет src у #mt-logo.
+        // Если файл недоступен — оставляет заглушку logo_nvl.png.
+        function loadLogo(callback) {
+          try {
+            fetch('logo_base64.txt')
+              .then(function (r) { return r.text(); })
+              .then(function (text) {
+                var b64 = (text || '').trim();
+                if (b64) callback(b64);
+                else callback(null);
+              })
+              .catch(function () { callback(null); });
+          } catch (e) {
+            callback(null);
+          }
+        }
+
         $(document).ready(function () {
           applyThemeFromStorage();
 
@@ -1529,62 +1713,6 @@
 
           $('#mt-retry').on('click', function () { startData(); });
 
-          // Табло в iframe загрузилось — прячем загрузчик и синхронизируем тему
-          $('#mt-detail-frame').on('load', function () {
-            $('#mt-detail-loader').hide();
-            try {
-              var fdoc = this.contentDocument || (this.contentWindow && this.contentWindow.document);
-              if (fdoc && fdoc.body) {
-                fdoc.body.classList.toggle('dark-theme', localStorage.getItem('tablo-theme') === 'dark');
-              }
-              // Кнопку полного экрана tablo.html прячем (страховка: основной
-              // запрет — отсутствующий allowfullscreen у iframe, из-за которого
-              // tablo.html сам скрывает кнопку по document.fullscreenEnabled).
-              // Если iframe всё же уйдёт в полноэкранный режим своим документом,
-              // браузер перекроет кнопку возврата — поэтому сразу из него
-              // выходим (на случай браузеров, игнорирующих allowfullscreen)
-              if (fdoc && fdoc.head && !fdoc.getElementById('mt-hide-tablo-fs')) {
-                var hideFs = fdoc.createElement('style');
-                hideFs.id = 'mt-hide-tablo-fs';
-                hideFs.textContent = '#fullscreen-toggle { display: none !important; }';
-                fdoc.head.appendChild(hideFs);
-              }
-              if (fdoc && !fdoc._mtFsGuard) {
-                fdoc._mtFsGuard = true;
-                var exitFrameFs = function () {
-                  var fe = fdoc.fullscreenElement || fdoc.webkitFullscreenElement;
-                  if (!fe) return;
-                  var exitFs = fdoc.exitFullscreen || fdoc.webkitExitFullscreen;
-                  if (!exitFs) return;
-                  try {
-                    var res = exitFs.call(fdoc);
-                    if (res && typeof res.catch === 'function') res.catch(function () {});
-                  } catch (err) {}
-                };
-                fdoc.addEventListener('fullscreenchange', exitFrameFs);
-                fdoc.addEventListener('webkitfullscreenchange', exitFrameFs);
-                exitFrameFs();
-              }
-              // Обратная синхронизация темы: кнопка «Режим» (смена темы)
-              // рисуется самим tablo.html внутри iframe. При её нажатии
-              // тема меняется в iframe — переносим её в мультитабло,
-              // чтобы кнопки возврата/полного экрана выглядели так же,
-              // как кнопка режима (одинаковый стиль в обеих темах).
-              // Источник истины — класс dark-theme на теле iframe.
-              if (fdoc && fdoc.body && !fdoc._mtThemeGuard) {
-                fdoc._mtThemeGuard = true;
-                if (window.MutationObserver) {
-                  var bodyObserver = new MutationObserver(function () {
-                    var isDark = fdoc.body.classList.contains('dark-theme');
-                    localStorage.setItem('tablo-theme', isDark ? 'dark' : 'light');
-                    $('body').toggleClass('dark-theme', isDark);
-                  });
-                  bodyObserver.observe(fdoc.body, { attributes: true, attributeFilter: ['class'] });
-                }
-              }
-            } catch (e) {}
-          });
-
           // Пересчёт раскладки сетки при изменении размера окна
           // (число колонок и высота плитки зависят от габаритов окна).
           $(window).on('resize', fitAllCanvases);
@@ -1599,6 +1727,15 @@
               });
             });
           }
+
+          // При выходе со страницы мультитабло — очищаем подписку на активные
+          // игры (SSE + таймер опроса), чтобы не оставлять висячих соединений.
+          $(window).on('pagehide beforeunload unload', function () {
+            if (mtActiveUnsubscribe) {
+              try { mtActiveUnsubscribe(); } catch (e) {}
+              mtActiveUnsubscribe = null;
+            }
+          });
 
           // Прямая ссылка multitablo.html?game=... сразу открывает большое табло
           var initialGame = typeof getParameterByName === 'function' ? getParameterByName('game') : null;

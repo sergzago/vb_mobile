@@ -944,12 +944,28 @@ html, body {
   color: var(--text-muted);
 }
 
+.game-item-score-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+}
+
 .game-item-score {
   font-size: 20px;
   font-weight: 700;
   color: var(--btn-primary);
-  margin-top: 6px;
+  text-align: left;
   font-variant-numeric: tabular-nums;
+}
+
+.game-item-referee {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  flex-shrink: 0;
+  white-space: nowrap;
+  margin: 0;
 }
 
 .games-empty {

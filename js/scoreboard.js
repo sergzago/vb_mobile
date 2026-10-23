@@ -638,19 +638,7 @@ function updateTabloSides(){
   renderSetHistory(scoreboard_data['set_history'], showTop, showBottom);
 }
 
-// Инициализация DB при загрузке
-$(document).ready(function() {
-  DB.init().then(function() {
-    // Получаем game_id из URL и передаем в подписку
-    var game_id = getParameterByName('game');
-    // Сбрасываем стили при первой загрузке
-    applyTemplate(null);
-    startScoreboardSubscription(game_id || 'test1');
-  }).catch(function(err) {
-    console.error('DB initialization failed:', err);
-  });
-
-  // Очистка при закрытии/перезагрузке страницы (в т.ч. закрытие iframe-табло из мультитабло)
+// Очистка при закрытии/перезагрузке страницы (в т.ч. закрытие iframe-табло из мультитабло)
 function cleanupSubscription() {
   if (_unsubscribe) {
     try { _unsubscribe(); } catch (e) { console.error('sb/ctl: error cleaning up subscription:', e); }
@@ -667,11 +655,23 @@ if (window.parent && window.parent !== window) {
   try { window.parent._sbCleanup = cleanupSubscription; } catch (e) {}
 }
 
-$(window).on('pagehide beforeunload unload', cleanupSubscription);
-// visibilitychange — срабатывает когда страница/iframe скрывается (iframe → about:blank)
-document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'hidden') {
-    cleanupSubscription();
-  }
-});
+// Инициализация DB при загрузке
+$(document).ready(function() {
+  DB.init().then(function() {
+    // Получаем game_id из URL и передаем в подписку
+    var game_id = getParameterByName('game');
+    // Сбрасываем стили при первой загрузке
+    applyTemplate(null);
+    startScoreboardSubscription(game_id || 'test1');
+  }).catch(function(err) {
+    console.error('DB initialization failed:', err);
+  });
+
+  $(window).on('pagehide beforeunload unload', cleanupSubscription);
+  // visibilitychange — срабатывает когда страница/iframe скрывается (iframe → about:blank)
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') {
+      cleanupSubscription();
+    }
+  });
 });

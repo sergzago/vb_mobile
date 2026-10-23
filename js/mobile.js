@@ -671,7 +671,10 @@
         html += '<div class="game-item' + (finished ? ' game-item-finished' : '') + '" data-game-id="' + gid + '">' +
           '<div class="game-item-title">' + home + ' — ' + away + (finished ? ' <span style="color:var(--text-muted);font-weight:400;font-size:12px;">(завершена)</span>' : '') + '</div>' +
           '<div class="game-item-sub">' + (g.tournament_name || '') + (g.venue ? ' · ' + g.venue : '') + ' · ID: ' + gid + '</div>' +
+          '<div class="game-item-score-row">' +
           '<div class="game-item-score">' + hs + ' : ' + as + ' <span style="font-size:12px;color:var(--text-muted);font-weight:400;">(Сет ' + period + ')</span></div>' +
+          '<div class="game-item-referee">Судья: ' + (g.displayname || g.username || '—') + '</div>' +
+          '</div>' +
           '</div>';
       }
       container.innerHTML = html;
